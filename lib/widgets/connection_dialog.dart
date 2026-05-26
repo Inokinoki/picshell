@@ -1,7 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_picker/file_picker.dart';
 import '../models/host.dart';
+import '../models/ssh_key.dart';
 import '../providers/host_provider.dart';
+import '../providers/key_provider.dart';
 import '../services/ssh_service.dart';
 
 class ConnectionDialog extends ConsumerStatefulWidget {
@@ -19,10 +23,13 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
   final _userController = TextEditingController();
   final _passwordController = TextEditingController();
   Host? _selectedSavedHost;
+  String _authType = 'password';
+  SshKey? _selectedKey;
 
   @override
   Widget build(BuildContext context) {
     final hosts = ref.watch(hostListProvider);
+    final keys = ref.watch(keyListProvider);
 
     return AlertDialog(
       title: const Text('New Connection'),
@@ -50,6 +57,9 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
                       _hostController.text = host.hostname;
                       _portController.text = host.port.toString();
                       _userController.text = host.username;
+                      if (host.authType == AuthType.key) {
+                        _authType = 'key';
+                      }
                     }
                   });
                 },
@@ -69,11 +79,42 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
               controller: _userController,
               decoration: const InputDecoration(labelText: 'Username'),
             ),
-            TextField(
-              controller: _passwordController,
-              decoration: const InputDecoration(labelText: 'Password'),
-              obscureText: true,
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              decoration: const InputDecoration(labelText: 'Auth Method'),
+              initialValue: _authType,
+              items: const [
+                DropdownMenuItem(value: 'password', child: Text('Password')),
+                DropdownMenuItem(value: 'key', child: Text('SSH Key')),
+              ],
+              onChanged: (v) => setState(() => _authType = v ?? 'password'),
             ),
+            if (_authType == 'password')
+              TextField(
+                controller: _passwordController,
+                decoration: const InputDecoration(labelText: 'Password'),
+                obscureText: true,
+              ),
+            if (_authType == 'key') ...[
+              const SizedBox(height: 8),
+              if (keys.isNotEmpty)
+                DropdownButtonFormField<SshKey>(
+                  decoration: const InputDecoration(labelText: 'Select Key'),
+                  initialValue: _selectedKey,
+                  items: keys
+                      .map(
+                        (k) => DropdownMenuItem(value: k, child: Text(k.name)),
+                      )
+                      .toList(),
+                  onChanged: (key) => setState(() => _selectedKey = key),
+                ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _importKey,
+                icon: const Icon(Icons.upload_file),
+                label: const Text('Import Private Key'),
+              ),
+            ],
           ],
         ),
       ),
@@ -82,33 +123,60 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        ElevatedButton(
-          onPressed: () {
-            final host =
-                _selectedSavedHost ??
-                Host(
-                  id: DateTime.now().millisecondsSinceEpoch.toString(),
-                  name: _hostController.text,
-                  hostname: _hostController.text,
-                  port: int.tryParse(_portController.text) ?? 22,
-                  username: _userController.text,
-                );
-
-            final config = SshConnectionConfig(
-              host: host.hostname,
-              port: host.port,
-              username: host.username,
-              authMethod: SshAuthMethod.password,
-              password: _passwordController.text,
-            );
-
-            widget.onConnect(host, config);
-            Navigator.pop(context);
-          },
-          child: const Text('Connect'),
-        ),
+        ElevatedButton(onPressed: _connect, child: const Text('Connect')),
       ],
     );
+  }
+
+  Future<void> _importKey() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+    );
+
+    if (result != null && result.files.isNotEmpty) {
+      final file = result.files.first;
+      final path = file.path;
+      if (path != null) {
+        final content = await File(path).readAsString();
+        final key = SshKey(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          name: file.name,
+          privateKeyPem: content,
+          publicKey: '',
+        );
+        await ref.read(keyListProvider.notifier).add(key);
+        setState(() => _selectedKey = key);
+      }
+    }
+  }
+
+  void _connect() {
+    final host =
+        _selectedSavedHost ??
+        Host(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          name: _hostController.text,
+          hostname: _hostController.text,
+          port: int.tryParse(_portController.text) ?? 22,
+          username: _userController.text,
+          authType: _authType == 'key' ? AuthType.key : AuthType.password,
+          keyId: _selectedKey?.id,
+        );
+
+    final config = SshConnectionConfig(
+      host: host.hostname,
+      port: host.port,
+      username: host.username,
+      authMethod: _authType == 'key'
+          ? SshAuthMethod.key
+          : SshAuthMethod.password,
+      password: _authType == 'password' ? _passwordController.text : null,
+      privateKeyPem: _authType == 'key' ? _selectedKey?.privateKeyPem : null,
+    );
+
+    widget.onConnect(host, config);
+    Navigator.pop(context);
   }
 
   @override
