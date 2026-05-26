@@ -1,10 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'app/app.dart';
+import 'package:picshell/app/app.dart';
+import 'package:picshell/models/host.dart';
+import 'package:picshell/models/ssh_key.dart';
+import 'package:picshell/models/session.dart';
+import 'package:picshell/services/host_store.dart';
+import 'package:picshell/providers/host_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
-  runApp(const ProviderScope(child: PicshellApp()));
+  Hive.registerAdapter(HostAdapter());
+  Hive.registerAdapter(AuthTypeAdapter());
+  Hive.registerAdapter(SshKeyAdapter());
+  Hive.registerAdapter(SessionAdapter());
+
+  final hostStore = HostStore();
+  await hostStore.init();
+
+  runApp(
+    ProviderScope(
+      overrides: [hostStoreProvider.overrideWithValue(hostStore)],
+      child: const PicshellApp(),
+    ),
+  );
 }
