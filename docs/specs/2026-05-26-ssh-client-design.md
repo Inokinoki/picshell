@@ -1,4 +1,4 @@
-# Flutter SSH Client — iTerm2 内联图片支持
+# Picshell — Flutter SSH Client with iTerm2 Image Support
 
 ## 概述
 
@@ -9,8 +9,8 @@
 - **框架**：Flutter 3.x
 - **SSH**：dartssh2
 - **终端渲染**：fork xterm_flutter，扩展图像协议支持
-- **状态管理**：待定（Riverpod 或 Bloc）
-- **本地存储**：Hive 或 SQLite
+- **状态管理**：Riverpod
+- **本地存储**：Hive
 
 ## 架构
 
@@ -31,7 +31,7 @@
 │              │  Host Store (本地持久化)   │
 ├──────────────┼────────────────────────────┤
 │  Platform    │  dartssh2 / dart:ffi       │
-│  Layer       │  SharedPreferences / Hive  │
+│  Layer       │  Hive                      │
 └──────────────┴────────────────────────────┘
 ```
 
@@ -160,7 +160,4 @@ lib/
 
 ## 待定事项
 
-- 状态管理选型（Riverpod vs Bloc）
-- 本地存储选型（Hive vs SQLite）
 - 图片缓存策略（内存限制、LRU 淘汰）
-- 是否支持图片缩放/点击放大
