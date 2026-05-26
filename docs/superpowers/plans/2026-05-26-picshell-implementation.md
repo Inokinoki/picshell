@@ -4,7 +4,7 @@
 
 **Goal:** Build a cross-platform (iOS + Android) Flutter SSH client that supports iTerm2 inline image protocol, with multi-session management and local host/key storage.
 
-**Architecture:** Fork xterm_flutter for terminal rendering, insert iTerm2 ESC]1337 parser into output stream, render decoded images on Canvas. SSH via dartssh2 with password/key/agent forwarding. State via Riverpod, persistence via Hive.
+**Architecture:** Fork xterm.dart (TerminalStudio/xterm.dart) for terminal rendering. Modify its `EscapeHandler` to intercept iTerm2 ESC]1337 OSC sequences, and modify `TerminalPainter` to render decoded images on Canvas. SSH via dartssh2 with password/key/agent forwarding. State via Riverpod, persistence via Hive.
 
 **Tech Stack:** Flutter 3.x, dartssh2, xterm (forked), Riverpod, Hive, flutter_riverpod
 
@@ -15,6 +15,19 @@
 ```
 picshell/
 ├── pubspec.yaml
+├── packages/
+│   └── xterm/                          # Forked xterm.dart
+│       ├── pubspec.yaml
+│       └── lib/
+│           └── src/
+│               ├── core/
+│               │   └── escape/
+│               │       ├── handler.dart    # Add unknownOSC for iTerm2
+│               │       └── parser.dart     # OSC parsing (unchanged)
+│               ├── terminal.dart           # Add iTerm2 image storage
+│               └── ui/
+│                   ├── painter.dart        # Add image rendering to Canvas
+│                   └── render.dart         # Pass images to painter
 ├── lib/
 │   ├── main.dart
 │   ├── app/
@@ -27,7 +40,6 @@ picshell/
 │   ├── services/
 │   │   ├── ssh_service.dart                # dartssh2 wrapper
 │   │   ├── agent_forward_service.dart      # SSH agent forwarding
-│   │   ├── iterm2_parser.dart              # ESC]1337 protocol parser
 │   │   └── host_store.dart                 # Hive CRUD for hosts/keys
 │   ├── providers/
 │   │   ├── session_provider.dart           # Riverpod: active sessions
@@ -42,10 +54,6 @@ picshell/
 │   │       ├── host_list_screen.dart       # Host list view
 │   │       └── host_edit_screen.dart       # Add/edit host
 │   ├── widgets/
-│   │   ├── terminal_widget/
-│   │   │   ├── terminal_widget.dart        # Main terminal widget
-│   │   │   ├── iterm2_image_layer.dart     # Image rendering layer
-│   │   │   └── terminal_painter.dart       # CustomPainter for text
 │   │   └── connection_dialog.dart          # SSH connect dialog
 │   └── utils/
 │       └── base64_chunk_assembler.dart     # Chunked base64 decoder
@@ -75,7 +83,15 @@ cd ~/Builds/picshell
 flutter create --org com.picshell --project-name picshell .
 ```
 
-- [ ] **Step 2: Add dependencies to `pubspec.yaml`**
+- [ ] **Step 2: Clone xterm.dart as local package**
+
+```bash
+cd ~/Builds/picshell
+git clone https://github.com/TerminalStudio/xterm.dart.git packages/xterm
+cd packages/xterm && git checkout v4.0.0
+```
+
+- [ ] **Step 3: Add dependencies to `pubspec.yaml`**
 
 ```yaml
 dependencies:
@@ -91,6 +107,8 @@ dependencies:
   pointycastle: ^3.9.0
   encrypt: ^5.0.3
   file_picker: ^6.1.0
+  xterm:
+    path: packages/xterm
 
 dev_dependencies:
   flutter_test:
@@ -101,7 +119,7 @@ dev_dependencies:
   mockito: ^5.4.4
 ```
 
-- [ ] **Step 3: Initialize Hive in `lib/main.dart`**
+- [ ] **Step 4: Initialize Hive in `lib/main.dart`**
 
 ```dart
 import 'package:flutter/material.dart';
@@ -116,16 +134,16 @@ void main() async {
 }
 ```
 
-- [ ] **Step 4: Verify project builds**
+- [ ] **Step 5: Verify project builds**
 
 ```bash
 cd ~/Builds/picshell && flutter build apk --debug 2>&1 | tail -5
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-cd ~/Builds/picshell && git add -A && git commit -m "feat: scaffold Flutter project with dependencies"
+cd ~/Builds/picshell && git add -A && git commit -m "feat: scaffold Flutter project with xterm.dart fork and dependencies"
 ```
 
 ---
@@ -406,297 +424,9 @@ cd ~/Builds/picshell && git add -A && git commit -m "feat: add HostStore with Hi
 
 ## Task 4: iTerm2 Protocol Parser
 
-**Files:**
-- Create: `lib/services/iterm2_parser.dart`
-- Create: `lib/utils/base64_chunk_assembler.dart`
-- Create: `test/services/iterm2_parser_test.dart`
+> **SKIPPED** — iTerm2 protocol parsing is now integrated directly into the xterm.dart fork in Task 6 (`Terminal.unknownOSC` handles ESC]1337 parsing, chunk assembly, and image decoding). No standalone parser file is needed.
 
-- [ ] **Step 1: Create `lib/utils/base64_chunk_assembler.dart`**
-
-```dart
-import 'dart:convert';
-import 'dart:typed_data';
-import 'dart:ui' as ui;
-
-class Base64ChunkAssembler {
-  final Map<String, _PendingImage> _pending = {};
-
-  /// Feed a chunk of base64 data. Returns a complete image when all chunks received.
-  Future<ui.Image?> feedChunk({
-    required String name,
-    required String base64Chunk,
-    required int totalSize,
-    int? width,
-    int? height,
-  }) async {
-    final entry = _pending.putIfAbsent(
-      name,
-      () => _PendingImage(totalSize: totalSize),
-    );
-
-    entry.buffer.add(base64Chunk);
-
-    final combined = entry.buffer.join();
-    if (combined.length * 3 ~/ 4 >= totalSize) {
-      _pending.remove(name);
-      final bytes = base64.decode(combined);
-      final codec = await ui.instantiateImageCodec(
-        bytes,
-        targetWidth: width,
-        targetHeight: height,
-      );
-      final frame = await codec.getNextFrame();
-      return frame.image;
-    }
-
-    return null;
-  }
-}
-
-class _PendingImage {
-  final int totalSize;
-  final List<String> buffer = [];
-
-  _PendingImage({required this.totalSize});
-}
-```
-
-- [ ] **Step 2: Create `lib/services/iterm2_parser.dart`**
-
-```dart
-import 'dart:ui' as ui;
-import '../utils/base64_chunk_assembler.dart';
-
-class Iterm2Params {
-  final String? name;
-  final int size;
-  final int? width;
-  final int? height;
-  final bool inline;
-  final bool preserveAspectRatio;
-
-  Iterm2Params({
-    this.name,
-    required this.size,
-    this.width,
-    this.height,
-    this.inline = true,
-    this.preserveAspectRatio = true,
-  });
-}
-
-class Iterm2Image {
-  final ui.Image image;
-  final int cursorRow;
-  final Iterm2Params params;
-
-  Iterm2Image({
-    required this.image,
-    required this.cursorRow,
-    required this.params,
-  });
-}
-
-class Iterm2Parser {
-  final Base64ChunkAssembler _assembler = Base64ChunkAssembler();
-  final void Function(Iterm2Image image) onImage;
-
-  // Buffer for partial escape sequences
-  String _escBuffer = '';
-  bool _inIterm2Sequence = false;
-  Iterm2Params? _currentParams;
-  String _payloadBuffer = '';
-
-  Iterm2Parser({required this.onImage});
-
-  /// Feed raw terminal output bytes. Handles splitting at escape boundaries.
-  List<String> feed(String data) {
-    final textChunks = <String>[];
-    int i = 0;
-
-    while (i < data.length) {
-      if (_inIterm2Sequence) {
-        i = _consumePayload(data, i);
-      } else {
-        final escStart = data.indexOf('\x1b]', i);
-        if (escStart == -1) {
-          textChunks.add(data.substring(i));
-          break;
-        }
-        if (escStart > i) {
-          textChunks.add(data.substring(i, escStart));
-        }
-        _inIterm2Sequence = true;
-        _escBuffer = '';
-        _payloadBuffer = '';
-        i = escStart + 2; // skip ESC ]
-      }
-    }
-
-    return textChunks;
-  }
-
-  int _consumePayload(String data, int start) {
-    // Look for ST (ESC \) or BEL (\x07) as terminator
-    for (int i = start; i < data.length; i++) {
-      if (data[i] == '\x07') {
-        _handleCompleteSequence(data.substring(start, i));
-        _inIterm2Sequence = false;
-        return i + 1;
-      }
-      if (data[i] == '\x1b' && i + 1 < data.length && data[i + 1] == '\\') {
-        _handleCompleteSequence(data.substring(start, i));
-        _inIterm2Sequence = false;
-        return i + 2;
-      }
-    }
-
-    // No terminator found, buffer the rest
-    _payloadBuffer += data.substring(start);
-    return data.length;
-  }
-
-  void _handleCompleteSequence(String payload) {
-    final fullPayload = _payloadBuffer + payload;
-
-    // Check if this is 1337;File=...
-    if (!fullPayload.startsWith('1337;File=')) return;
-
-    final afterPrefix = fullPayload.substring('1337;File='.length);
-    final semiIndex = afterPrefix.indexOf(';');
-    if (semiIndex == -1) return;
-
-    final paramsStr = afterPrefix.substring(0, semiIndex);
-    final base64Data = afterPrefix.substring(semiIndex + 1);
-
-    final params = _parseParams(paramsStr);
-    if (params == null || params.size == 0) return;
-
-    final name = params.name ?? '__default__';
-    _processChunk(name, base64Data, params);
-  }
-
-  Iterm2Params? _parseParams(String s) {
-    final parts = s.split(',');
-    String? name;
-    int size = 0;
-    int? width;
-    int? height;
-    bool inline = true;
-    bool preserveAspectRatio = true;
-
-    for (final part in parts) {
-      final eqIndex = part.indexOf('=');
-      if (eqIndex == -1) continue;
-      final key = part.substring(0, eqIndex);
-      final value = part.substring(eqIndex + 1);
-
-      switch (key) {
-        case 'name':
-          name = value;
-        case 'size':
-          size = int.tryParse(value) ?? 0;
-        case 'width':
-          width = _parseDimension(value);
-        case 'height':
-          height = _parseDimension(value);
-        case 'inline':
-          inline = value == '1';
-        case 'preserveAspectRatio':
-          preserveAspectRatio = value == '1';
-      }
-    }
-
-    if (size == 0) return null;
-    return Iterm2Params(
-      name: name,
-      size: size,
-      width: width,
-      height: height,
-      inline: inline,
-      preserveAspectRatio: preserveAspectRatio,
-    );
-  }
-
-  int? _parseDimension(String s) {
-    if (s == 'auto') return null;
-    if (s.endsWith('%')) return null; // handle % as auto for now
-    return int.tryParse(s.replaceAll(RegExp(r'[^0-9]'), ''));
-  }
-
-  Future<void> _processChunk(
-    String name,
-    String base64Data,
-    Iterm2Params params,
-  ) async {
-    final image = await _assembler.feedChunk(
-      name: name,
-      base64Chunk: base64Data,
-      totalSize: params.size,
-      width: params.width,
-      height: params.height,
-    );
-
-    if (image != null) {
-      onImage(Iterm2Image(
-        image: image,
-        cursorRow: 0, // will be set by terminal widget
-        params: params,
-      ));
-    }
-  }
-}
-```
-
-- [ ] **Step 3: Create `test/services/iterm2_parser_test.dart`**
-
-```dart
-import 'package:flutter_test/flutter_test.dart';
-import 'package:picshell/services/iterm2_parser.dart';
-
-void main() {
-  group('Iterm2Parser', () {
-    test('passes through normal text', () {
-      final images = <Iterm2Image>[];
-      final parser = Iterm2Parser(onImage: (img) => images.add(img));
-      final chunks = parser.feed('hello world\n');
-      expect(chunks, ['hello world\n']);
-      expect(images, isEmpty);
-    });
-
-    test('extracts iTerm2 sequence and leaves surrounding text', () {
-      final images = <Iterm2Image>[];
-      final parser = Iterm2Parser(onImage: (img) => images.add(img));
-      // Use a tiny valid base64 for a 1x1 PNG: size=68
-      final payload = '1337;File=inline=1,size=68:iVBORw0KGgo=';
-      final chunks = parser.feed('before\x1b]${payload}\x07after');
-      expect(chunks, ['before', 'after']);
-    });
-
-    test('handles split data across multiple feed calls', () {
-      final images = <Iterm2Image>[];
-      final parser = Iterm2Parser(onImage: (img) => images.add(img));
-      final full = '1337;File=inline=1,size=10:dGVzdGRhdGE=';
-      final mid = full.length ~/ 2;
-      parser.feed('start\x1b]${full.substring(0, mid)}');
-      parser.feed('${full.substring(mid)}\x07end');
-      // Should not crash, images list may or may not have entry depending on base64 validity
-    });
-  });
-}
-```
-
-- [ ] **Step 4: Run parser tests**
-
-```bash
-cd ~/Builds/picshell && flutter test test/services/iterm2_parser_test.dart
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd ~/Builds/picshell && git add -A && git commit -m "feat: add iTerm2 protocol parser with chunked base64 assembly"
-```
+- [ ] **Step 1: Skip this task — proceed to Task 5**
 
 ---
 
@@ -868,332 +598,247 @@ cd ~/Builds/picshell && git add -A && git commit -m "feat: add SSH service wrapp
 
 ---
 
-## Task 6: Terminal Widget (Fork xterm_flutter)
+## Task 6: Fork xterm.dart — iTerm2 Image Protocol Support
 
 **Files:**
-- Create: `lib/widgets/terminal_widget/terminal_painter.dart`
-- Create: `lib/widgets/terminal_widget/iterm2_image_layer.dart`
-- Create: `lib/widgets/terminal_widget/terminal_widget.dart`
+- Modify: `packages/xterm/lib/src/core/escape/handler.dart` — add `unknownOSC` callback
+- Modify: `packages/xterm/lib/src/core/escape/parser.dart` — forward iTerm2 OSC to handler
+- Modify: `packages/xterm/lib/src/terminal.dart` — store pending images, implement OSC callback
+- Modify: `packages/xterm/lib/src/ui/painter.dart` — render images on Canvas
+- Modify: `packages/xterm/lib/src/ui/render.dart` — pass image data to painter
 
-- [ ] **Step 1: Create `lib/widgets/terminal_widget/terminal_painter.dart`**
+- [ ] **Step 1: Add iTerm2 image model to `packages/xterm/lib/src/terminal.dart`**
 
-This is the CustomPainter that renders terminal text on Canvas.
-
-```dart
-import 'package:flutter/material.dart';
-
-class TerminalLine {
-  final String text;
-  final TextStyle style;
-
-  TerminalLine({required this.text, this.style = const TextStyle()});
-}
-
-class TerminalPainter extends CustomPainter {
-  final List<TerminalLine> lines;
-  final double cellWidth;
-  final double cellHeight;
-  final int scrollOffset;
-  final int cursorRow;
-  final int cursorCol;
-  final TextStyle baseStyle;
-
-  TerminalPainter({
-    required this.lines,
-    required this.cellWidth,
-    required this.cellHeight,
-    this.scrollOffset = 0,
-    this.cursorRow = 0,
-    this.cursorCol = 0,
-    this.baseStyle = const TextStyle(
-      fontFamily: 'monospace',
-      fontSize: 14,
-      color: Colors.white,
-    ),
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final bgPaint = Paint()..color = const Color(0xFF1E1E1E);
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bgPaint);
-
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
-
-    final visibleLines = lines.skip(scrollOffset).take((size.height / cellHeight).ceil());
-
-    int row = 0;
-    for (final line in visibleLines) {
-      textPainter.text = TextSpan(
-        text: line.text,
-        style: baseStyle.merge(line.style),
-      );
-      textPainter.layout();
-      textPainter.paint(canvas, Offset(0, row * cellHeight));
-      row++;
-    }
-
-    // Draw cursor
-    if (cursorRow >= scrollOffset) {
-      final cursorY = (cursorRow - scrollOffset) * cellHeight;
-      final cursorX = cursorCol * cellWidth;
-      final cursorPaint = Paint()
-        ..color = Colors.white.withAlpha(180)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5;
-      canvas.drawRect(
-        Rect.fromLTWH(cursorX, cursorY, cellWidth, cellHeight),
-        cursorPaint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant TerminalPainter oldDelegate) {
-    return lines != oldDelegate.lines ||
-        scrollOffset != oldDelegate.scrollOffset ||
-        cursorRow != oldDelegate.cursorRow ||
-        cursorCol != oldDelegate.cursorCol;
-  }
-}
-```
-
-- [ ] **Step 2: Create `lib/widgets/terminal_widget/iterm2_image_layer.dart`**
+Add at the top of the file (after imports):
 
 ```dart
 import 'dart:ui' as ui;
-import 'package:flutter/material.dart';
-import '../../services/iterm2_parser.dart';
+import 'dart:convert';
 
-class Iterm2ImageLayer extends StatelessWidget {
-  final List<Iterm2Image> images;
-  final double cellHeight;
-  final int scrollOffset;
+class Iterm2Image {
+  final ui.Image image;
+  final int cursorRow;
+  final int? width;
+  final int? height;
 
-  const Iterm2ImageLayer({
-    super.key,
-    required this.images,
-    required this.cellHeight,
-    this.scrollOffset = 0,
+  Iterm2Image({
+    required this.image,
+    required this.cursorRow,
+    this.width,
+    this.height,
   });
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _ImageLayerPainter(
-        images: images,
-        cellHeight: cellHeight,
-        scrollOffset: scrollOffset,
-      ),
-    );
-  }
-}
-
-class _ImageLayerPainter extends CustomPainter {
-  final List<Iterm2Image> images;
-  final double cellHeight;
-  final int scrollOffset;
-
-  _ImageLayerPainter({
-    required this.images,
-    required this.cellHeight,
-    required this.scrollOffset,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    for (final entry in images) {
-      final visibleRow = entry.cursorRow - scrollOffset;
-      if (visibleRow < -50 || visibleRow > size.height / cellHeight + 50) continue;
-
-      final y = visibleRow * cellHeight;
-      final imgWidth = entry.params.width?.toDouble() ?? entry.image.width.toDouble();
-      final imgHeight = entry.params.height?.toDouble() ?? entry.image.height.toDouble();
-
-      final src = Rect.fromLTWH(
-        0, 0,
-        entry.image.width.toDouble(),
-        entry.image.height.toDouble(),
-      );
-      final dst = Rect.fromLTWH(0, y, imgWidth, imgHeight);
-
-      canvas.drawImageRect(entry.image, src, dst, Paint());
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ImageLayerPainter oldDelegate) {
-    return images != oldDelegate.images || scrollOffset != oldDelegate.scrollOffset;
-  }
 }
 ```
 
-- [ ] **Step 3: Create `lib/widgets/terminal_widget/terminal_widget.dart`**
+- [ ] **Step 2: Modify `EscapeHandler` to support unknown OSC**
+
+Open `packages/xterm/lib/src/core/escape/handler.dart` and add this method to the `EscapeHandler` mixin:
 
 ```dart
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import '../../services/iterm2_parser.dart';
-import '../../services/ssh_service.dart';
-import 'terminal_painter.dart';
-import 'iterm2_image_layer.dart';
+/// Called when an OSC sequence is not recognized by the parser.
+/// [code] is the OSC command number (e.g., 1337 for iTerm2).
+/// [data] is the raw payload string after "code;".
+void unknownOSC(int code, String data) {}
+```
 
-class TerminalWidget extends StatefulWidget {
-  final SshService sshService;
+- [ ] **Step 3: Modify `EscapeParser` to call `unknownOSC` for unrecognized OSC**
 
-  const TerminalWidget({super.key, required this.sshService});
+Open `packages/xterm/lib/src/core/escape/parser.dart`. Find the `_escHandleOSC()` method. In the switch/case for recognized OSC codes (0, 1, 2), add a `default:` branch that calls:
 
-  @override
-  State<TerminalWidget> createState() => _TerminalWidgetState();
+```dart
+default:
+  handler.unknownOSC(code, payload);
+  break;
+```
+
+Where `code` is the parsed integer before the first `;`, and `payload` is everything after `code;`.
+
+- [ ] **Step 4: Implement `unknownOSC` in `Terminal` to handle iTerm2 protocol**
+
+Open `packages/xterm/lib/src/terminal.dart`. Add these fields and methods to the `Terminal` class:
+
+```dart
+/// Pending iTerm2 images waiting to be rendered.
+final List<Iterm2Image> iterm2Images = [];
+
+/// Assembler for chunked base64 iTerm2 image data.
+final Map<String, _PendingChunk> _pendingChunks = {};
+
+@override
+void unknownOSC(int code, String data) {
+  if (code == 1337) {
+    _handleIterm2File(data);
+  }
 }
 
-class _TerminalWidgetState extends State<TerminalWidget> {
-  final List<TerminalLine> _lines = [];
-  final List<Iterm2Image> _images = [];
-  late final Iterm2Parser _iterm2Parser;
-  late final FocusNode _focusNode;
-  int _cursorRow = 0;
-  int _cursorCol = 0;
-  int _scrollOffset = 0;
+void _handleIterm2File(String data) {
+  // Format: File=<params>;<base64data>
+  if (!data.startsWith('File=')) return;
 
-  static const double _cellWidth = 8.4;
-  static const double _cellHeight = 18.0;
-  static const int _maxLines = 10000;
+  final afterPrefix = data.substring('File='.length);
+  final semiIndex = afterPrefix.indexOf(';');
+  if (semiIndex == -1) return;
 
-  @override
-  void initState() {
-    super.initState();
-    _focusNode = FocusNode();
-    _iterm2Parser = Iterm2Parser(onImage: _onImage);
+  final paramsStr = afterPrefix.substring(0, semiIndex);
+  final base64Data = afterPrefix.substring(semiIndex + 1);
 
-    widget.sshService.output.listen((data) {
-      final textChunks = _iterm2Parser.feed(data);
-      for (final chunk in textChunks) {
-        _appendText(chunk);
-      }
-    });
+  final params = _parseIterm2Params(paramsStr);
+  if (params == null) return;
+
+  final name = params['name'] ?? '__default__';
+  final size = int.tryParse(params['size'] ?? '0') ?? 0;
+  if (size == 0) return;
+
+  final width = _parseDimension(params['width']);
+  final height = _parseDimension(params['height']);
+
+  _assembleChunk(name, base64Data, size, width, height);
+}
+
+Map<String, String>? _parseIterm2Params(String s) {
+  final result = <String, String>{};
+  for (final part in s.split(',')) {
+    final eq = part.indexOf('=');
+    if (eq == -1) continue;
+    result[part.substring(0, eq)] = part.substring(eq + 1);
   }
+  return result.isEmpty ? null : result;
+}
 
-  void _onImage(Iterm2Image image) {
-    setState(() {
-      _images.add(Iterm2Image(
-        image: image.image,
-        cursorRow: _cursorRow,
-        params: image.params,
-      ));
-      // Move cursor down by image height in rows
-      final imgRows = (image.params.height ?? image.image.height) / _cellHeight;
-      _cursorRow += imgRows.ceil();
-    });
+int? _parseDimension(String? s) {
+  if (s == null || s == 'auto' || s.endsWith('%')) return null;
+  return int.tryParse(s.replaceAll(RegExp(r'[^0-9]'), ''));
+}
+
+void _assembleChunk(
+  String name,
+  String base64Chunk,
+  int totalSize,
+  int? width,
+  int? height,
+) {
+  final entry = _pendingChunks.putIfAbsent(
+    name,
+    () => _PendingChunk(totalSize: totalSize),
+  );
+  entry.buffer.add(base64Chunk);
+
+  final combined = entry.buffer.join();
+  // Base64 decoded size = combined.length * 3 / 4 (approx)
+  if (combined.length * 3 ~/ 4 >= totalSize) {
+    _pendingChunks.remove(name);
+    _decodeIterm2Image(name, combined, width, height);
   }
+}
 
-  void _appendText(String text) {
-    final newLines = text.split('\n');
-    setState(() {
-      for (int i = 0; i < newLines.length; i++) {
-        if (i > 0) {
-          _cursorRow++;
-          _cursorCol = 0;
-        }
-        if (_lines.length <= _cursorRow) {
-          _lines.add(TerminalLine(text: ''));
-        }
-        final existing = _lines[_cursorRow].text;
-        final before = existing.substring(0, _cursorCol.clamp(0, existing.length));
-        _lines[_cursorRow] = TerminalLine(text: before + newLines[i]);
-        _cursorCol += newLines[i].length;
-      }
-
-      // Trim old lines
-      if (_lines.length > _maxLines) {
-        final removeCount = _lines.length - _maxLines;
-        _lines.removeRange(0, removeCount);
-        for (final img in _images) {
-          // Note: cursorRow is immutable in Iterm2Image; adjust scroll
-        }
-        _cursorRow -= removeCount;
-        _scrollOffset = (_scrollOffset - removeCount).clamp(0, _scrollOffset);
-      }
-    });
-  }
-
-  void _handleKeyEvent(KeyEvent event) {
-    if (event is! KeyDownEvent) return;
-
-    String? data;
-    if (event.character != null && !event.logicalKey.isModifier) {
-      data = event.character;
-    } else if (event.logicalKey == LogicalKeyboardKey.enter) {
-      data = '\r';
-    } else if (event.logicalKey == LogicalKeyboardKey.backspace) {
-      data = '\x7f';
-    } else if (event.logicalKey == LogicalKeyboardKey.tab) {
-      data = '\t';
-    } else if (event.logicalKey == LogicalKeyboardKey.escape) {
-      data = '\x1b';
-    }
-
-    if (data != null) {
-      widget.sshService.writeToTerminal(data);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => _focusNode.requestFocus(),
-      child: KeyboardListener(
-        focusNode: _focusNode,
-        onKeyEvent: _handleKeyEvent,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final visibleRows = (constraints.maxHeight / _cellHeight).floor();
-            final visibleCols = (constraints.maxWidth / _cellWidth).floor();
-            widget.sshService.resizeTerminal(visibleCols, visibleRows);
-
-            return Stack(
-              children: [
-                CustomPaint(
-                  size: Size(constraints.maxWidth, constraints.maxHeight),
-                  painter: TerminalPainter(
-                    lines: _lines,
-                    cellWidth: _cellWidth,
-                    cellHeight: _cellHeight,
-                    scrollOffset: _scrollOffset,
-                    cursorRow: _cursorRow,
-                    cursorCol: _cursorCol,
-                  ),
-                ),
-                Iterm2ImageLayer(
-                  images: _images,
-                  cellHeight: _cellHeight,
-                  scrollOffset: _scrollOffset,
-                ),
-              ],
-            );
-          },
-        ),
-      ),
+Future<void> _decodeIterm2Image(
+  String name,
+  String base64Combined,
+  int? width,
+  int? height,
+) async {
+  try {
+    final bytes = base64.decode(base64Combined);
+    final codec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: width,
+      targetHeight: height,
     );
+    final frame = await codec.getNextFrame();
+    iterm2Images.add(Iterm2Image(
+      image: frame.image,
+      cursorRow: buffer.cursorY,
+      width: width,
+      height: height,
+    ));
+    // Reserve vertical space: move cursor down by image height in terminal rows
+    final imgHeight = height ?? frame.image.height;
+    final rows = (imgHeight / cellHeight).ceil();
+    for (int i = 0; i < rows; i++) {
+      buffer.newLine();
+    }
+    refreshView();
+  } catch (_) {
+    // Ignore decode errors (malformed base64, unsupported format)
   }
+}
 
-  @override
-  void dispose() {
-    _focusNode.dispose();
-    super.dispose();
+double get cellHeight => 18.0; // Will be overridden by render metrics
+```
+
+- [ ] **Step 5: Modify `TerminalPainter` to render images**
+
+Open `packages/xterm/lib/src/ui/painter.dart`. Add a method to paint images after text:
+
+```dart
+import 'dart:ui' as ui;
+import '../terminal.dart' show Iterm2Image;
+
+/// Paint iTerm2 inline images onto the terminal canvas.
+void paintImages(
+  Canvas canvas,
+  List<Iterm2Image> images,
+  double cellWidth,
+  double cellHeight,
+  int scrollOffset,
+) {
+  for (final entry in images) {
+    final visibleRow = entry.cursorRow - scrollOffset;
+    // Skip images far outside viewport
+    if (visibleRow < -50) continue;
+
+    final y = visibleRow * cellHeight;
+    final imgW = entry.width?.toDouble() ?? entry.image.width.toDouble();
+    final imgH = entry.height?.toDouble() ?? entry.image.height.toDouble();
+
+    final src = Rect.fromLTWH(
+      0, 0,
+      entry.image.width.toDouble(),
+      entry.image.height.toDouble(),
+    );
+    final dst = Rect.fromLTWH(0, y, imgW, imgH);
+
+    canvas.drawImageRect(entry.image, src, dst, Paint());
   }
 }
 ```
 
-- [ ] **Step 4: Verify widget compiles**
+- [ ] **Step 6: Wire image painting into `RenderTerminal.paint()`**
 
-```bash
-cd ~/Builds/picshell && flutter analyze lib/widgets/terminal_widget/
+Open `packages/xterm/lib/src/ui/render.dart`. In the `paint()` method, after the text painting loop and before painting cursor/composing, add:
+
+```dart
+_painter.paintImages(
+  canvas,
+  terminal.iterm2Images,
+  _cellWidth,
+  _cellHeight,
+  terminal.scrollOffsetFromBottom,
+);
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Wire terminal output through SSH to `terminal.write()`**
+
+In `lib/screens/terminal/terminal_screen.dart` or wherever SSH output is consumed, ensure the flow is:
+
+```dart
+sshService.output.listen((data) {
+  terminal.write(data);
+});
+```
+
+The `terminal.write()` call goes through `EscapeParser`, which will call `unknownOSC(1337, ...)` for iTerm2 sequences, triggering the image pipeline.
+
+- [ ] **Step 8: Verify fork compiles**
 
 ```bash
-cd ~/Builds/picshell && git add -A && git commit -m "feat: add terminal widget with text painter and iTerm2 image layer"
+cd ~/Builds/picshell && flutter analyze packages/xterm/lib/
+```
+
+- [ ] **Step 9: Commit fork changes**
+
+```bash
+cd ~/Builds/picshell && git add -A && git commit -m "feat: fork xterm.dart with iTerm2 inline image protocol support"
 ```
 
 ---
@@ -2118,12 +1763,14 @@ cd ~/Builds/picshell && git add -A && git commit -m "chore: integration fixes an
 
 ## Notes for Implementing Agent
 
-1. **xterm_flutter fork is NOT required** — The plan uses a custom `TerminalPainter` and `Iterm2Parser` instead of forking xterm_flutter. This is simpler and avoids maintaining a fork. If you find the custom terminal too basic, fork xterm_flutter later and integrate the `Iterm2Parser` into its output stream handler.
+1. **Fork xterm.dart** — The plan forks `TerminalStudio/xterm.dart` v4.0.0 into `packages/xterm/`. The fork modifies `EscapeHandler` (add `unknownOSC`), `Terminal` (iTerm2 image assembly + storage), and `TerminalPainter` (image rendering on Canvas). All other xterm.dart functionality (VT100, cursor, scrolling, etc.) is preserved.
 
-2. **Terminal escape sequences** — The current `TerminalPainter` only handles plain text and cursor. For a production terminal, you'll need to parse VT100/xterm escape sequences (CSI/OSC sequences). Consider using the `xterm` Dart package's parser without its renderer, or add a basic escape sequence parser as a follow-up task.
+2. **iTerm2 OSC flow** — When xterm.dart's `EscapeParser` encounters an OSC sequence with code 1337, it calls `handler.unknownOSC(1337, payload)`. The `Terminal` class overrides this to parse `File=<params>;<base64>`, assemble chunks by `name`, decode to `ui.Image`, store in `iterm2Images`, and advance the cursor. The `TerminalPainter` draws images at their cursor row position.
 
-3. **Image rendering position** — Images are placed at `_cursorRow` when received. For correct inline rendering, the terminal parser needs to track cursor position when the ESC]1337 sequence is encountered and reserve vertical space for the image.
+3. **Image rendering position** — Images are placed at the cursor row when the ESC]1337 sequence completes. After decoding, the cursor is advanced by the image's row height so subsequent text appears below the image.
 
 4. **File picker for key import** — The `file_picker` package requires platform-specific setup (Info.plist for iOS, etc.). Follow the package README for each platform.
 
 5. **dartssh2 limitations** — Agent forwarding support in dartssh2 may be limited. Test early and fall back gracefully.
+
+6. **Terminal cell metrics** — `cellHeight` in the fork defaults to 18.0 but should be measured from the actual font. `RenderTerminal` has `_cellWidth`/`_cellHeight` that should be exposed or passed through.
