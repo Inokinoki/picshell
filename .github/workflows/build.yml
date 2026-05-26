@@ -12,8 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - uses: actions/setup-java@v4
         with:
@@ -30,7 +28,17 @@ jobs:
 
       - run: flutter test test/
 
-      - run: flutter build apk --debug
+      - name: Generate debug keystore
+        run: |
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
+
+      - name: Build signed APK
+        run: |
+          flutter build apk --debug \
+            --dart-define=KEYSTORE_PATH=debug.keystore \
+            --dart-define=KEYSTORE_PASSWORD=android \
+            --dart-define=KEY_ALIAS=androiddebugkey \
+            --dart-define=KEY_PASSWORD=android
 
       - uses: actions/upload-artifact@v4
         with:
