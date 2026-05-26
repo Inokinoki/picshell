@@ -86,6 +86,7 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
               items: const [
                 DropdownMenuItem(value: 'password', child: Text('Password')),
                 DropdownMenuItem(value: 'key', child: Text('SSH Key')),
+                DropdownMenuItem(value: 'agent', child: Text('SSH Agent')),
               ],
               onChanged: (v) => setState(() => _authType = v ?? 'password'),
             ),
@@ -115,6 +116,14 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
                 label: const Text('Import Private Key'),
               ),
             ],
+            if (_authType == 'agent')
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  'Uses keys from ~/.ssh/ directory',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
           ],
         ),
       ),
@@ -160,17 +169,31 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
           hostname: _hostController.text,
           port: int.tryParse(_portController.text) ?? 22,
           username: _userController.text,
-          authType: _authType == 'key' ? AuthType.key : AuthType.password,
+          authType: _authType == 'key'
+              ? AuthType.key
+              : _authType == 'agent'
+              ? AuthType.key
+              : AuthType.password,
           keyId: _selectedKey?.id,
         );
+
+    SshAuthMethod authMethod;
+    switch (_authType) {
+      case 'key':
+        authMethod = SshAuthMethod.key;
+        break;
+      case 'agent':
+        authMethod = SshAuthMethod.agent;
+        break;
+      default:
+        authMethod = SshAuthMethod.password;
+    }
 
     final config = SshConnectionConfig(
       host: host.hostname,
       port: host.port,
       username: host.username,
-      authMethod: _authType == 'key'
-          ? SshAuthMethod.key
-          : SshAuthMethod.password,
+      authMethod: authMethod,
       password: _authType == 'password' ? _passwordController.text : null,
       privateKeyPem: _authType == 'key' ? _selectedKey?.privateKeyPem : null,
     );

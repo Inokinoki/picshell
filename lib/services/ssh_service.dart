@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
+import 'agent_forward_service.dart';
 
 enum SshAuthMethod { password, key, agent }
 
@@ -64,7 +65,16 @@ class SshService {
           );
           break;
         case SshAuthMethod.agent:
-          client = SSHClient(socket, username: config.username);
+          final agentClient = await AgentForwardService.connectWithAgent(
+            host: config.host,
+            port: config.port,
+            username: config.username,
+          );
+          if (agentClient != null) {
+            client = agentClient;
+          } else {
+            throw Exception('No SSH keys found in ~/.ssh/');
+          }
           break;
       }
 
