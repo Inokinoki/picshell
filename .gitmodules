@@ -1,3 +1,0 @@
-[submodule "packages/xterm"]
-	url = https://github.com/TerminalStudio/xterm.dart.git
-	branch = main
