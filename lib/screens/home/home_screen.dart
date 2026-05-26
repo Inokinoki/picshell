@@ -129,6 +129,6 @@ class _SessionView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final session = sessions.last;
-    return TerminalScreen(sshService: session.sshService);
+    return TerminalScreen(terminal: session.terminal);
   }
 }
