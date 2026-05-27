@@ -1,8 +1,11 @@
+import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import 'package:xterm/xterm.dart';
+import '../models/floating_image.dart';
 import '../models/host.dart';
 import '../services/ssh_service.dart';
+import 'floating_image_provider.dart';
 
 const _uuid = Uuid();
 
@@ -27,11 +30,13 @@ class SessionState {
 
 final sessionListProvider =
     StateNotifierProvider<SessionListNotifier, List<SessionState>>((ref) {
-      return SessionListNotifier();
+      return SessionListNotifier(ref);
     });
 
 class SessionListNotifier extends StateNotifier<List<SessionState>> {
-  SessionListNotifier() : super([]);
+  final Ref _ref;
+
+  SessionListNotifier(this._ref) : super([]);
 
   Future<void> openSession(Host host, SshConnectionConfig config) async {
     final service = SshService();
@@ -45,6 +50,18 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     terminal.onResize = (width, height, pixelWidth, pixelHeight) {
       service.resizeTerminal(width, height);
     };
+
+    terminal.onImageDecoded =
+        (Uint8List bytes, String imgName, int? w, int? h) {
+          final image = FloatingImage(
+            id: _uuid.v4(),
+            rawBytes: bytes,
+            name: imgName,
+            requestedWidth: w,
+            requestedHeight: h,
+          );
+          _ref.read(floatingImagesProvider.notifier).addImage(image);
+        };
 
     final session = SessionState(
       id: sessionId,
