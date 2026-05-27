@@ -1,5 +1,6 @@
 import 'dart:convert' show base64;
 import 'dart:math' show max;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:xterm/src/base/observable.dart';
@@ -153,6 +154,11 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
   /// Cell height for image rendering (will be updated from render metrics).
   double cellHeight = 18.0;
+
+  /// Callback when an iTerm2 image is decoded.
+  /// Receives raw image bytes, filename, and optional width/height from protocol.
+  void Function(Uint8List bytes, String name, int? width, int? height)?
+      onImageDecoded;
 
   /* TerminalState */
 
@@ -1023,24 +1029,10 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
       final heightVal = heightStr != null
           ? int.tryParse(heightStr.replaceAll(RegExp(r'[^0-9]'), ''))
           : null;
-      final codec = await ui.instantiateImageCodec(
-        bytes,
-        targetWidth: widthVal,
-        targetHeight: heightVal,
-      );
-      final frame = await codec.getNextFrame();
-      iterm2Images.add(Iterm2Image(
-        image: frame.image,
-        cursorRow: cursorRow,
-        widthStr: widthStr,
-        heightStr: heightStr,
-      ));
-      final imgHeight = heightVal ?? frame.image.height;
-      final rows = (imgHeight / cellHeight).ceil();
-      for (int i = 0; i < rows; i++) {
-        buffer.lineFeed();
+
+      if (onImageDecoded != null) {
+        onImageDecoded!(bytes, name, widthVal, heightVal);
       }
-      notifyListeners();
     } catch (_) {
       // Ignore decode errors
     }
