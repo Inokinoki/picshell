@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../models/floating_image.dart';
 import '../../models/host.dart';
+import '../../providers/floating_image_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../services/ssh_service.dart';
 import '../../widgets/connection_dialog.dart';
+import '../../widgets/floating_image_overlay.dart';
 import '../terminal/terminal_screen.dart';
 
 final selectedSessionIndexProvider = StateProvider<int>((ref) => 0);
@@ -21,6 +24,10 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final sessions = ref.watch(sessionListProvider);
     final selectedIndex = ref.watch(selectedSessionIndexProvider);
+    final floatingImages = ref.watch(floatingImagesProvider);
+    final minimizedImages = floatingImages
+        .where((img) => img.minimized)
+        .toList();
 
     final clampedIndex = sessions.isEmpty
         ? 0
@@ -37,82 +44,99 @@ class HomeScreen extends ConsumerWidget {
             onInvoke: (_) => _showConnectDialog(context, ref),
           ),
         },
-        child: Scaffold(
-          appBar: AppBar(
-            title: const Text('Picshell'),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.dns),
-                onPressed: () => context.push('/hosts'),
-                tooltip: 'Manage Hosts',
-              ),
-              IconButton(
-                icon: const Icon(Icons.add),
-                onPressed: () => _showConnectDialog(context, ref),
-                tooltip: 'New Connection (Ctrl+N)',
-              ),
-              IconButton(
-                icon: const Icon(Icons.settings),
-                onPressed: () => context.push('/settings'),
-                tooltip: 'Settings',
-              ),
-            ],
-            bottom: sessions.isNotEmpty
-                ? PreferredSize(
-                    preferredSize: const Size.fromHeight(40),
-                    child: _SessionTabBar(
-                      sessions: sessions,
-                      selectedIndex: clampedIndex,
-                      onSelect: (index) =>
+        child: FloatingImageOverlay(
+          child: Scaffold(
+            appBar: AppBar(
+              title: const Text('Picshell'),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.dns),
+                  onPressed: () => context.push('/hosts'),
+                  tooltip: 'Manage Hosts',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add),
+                  onPressed: () => _showConnectDialog(context, ref),
+                  tooltip: 'New Connection (Ctrl+N)',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.settings),
+                  onPressed: () => context.push('/settings'),
+                  tooltip: 'Settings',
+                ),
+              ],
+              bottom: sessions.isNotEmpty || minimizedImages.isNotEmpty
+                  ? PreferredSize(
+                      preferredSize: const Size.fromHeight(40),
+                      child: _SessionTabBar(
+                        sessions: sessions,
+                        selectedIndex: clampedIndex,
+                        onSelect: (index) =>
+                            ref
+                                    .read(selectedSessionIndexProvider.notifier)
+                                    .state =
+                                index,
+                        onClose: (id) {
                           ref
-                                  .read(selectedSessionIndexProvider.notifier)
-                                  .state =
-                              index,
-                      onClose: (id) {
-                        ref.read(sessionListProvider.notifier).closeSession(id);
-                        final current = ref.read(selectedSessionIndexProvider);
-                        final newSessions = ref.read(sessionListProvider);
-                        if (current >= newSessions.length &&
-                            newSessions.isNotEmpty) {
+                              .read(sessionListProvider.notifier)
+                              .closeSession(id);
+                          final current = ref.read(
+                            selectedSessionIndexProvider,
+                          );
+                          final newSessions = ref.read(sessionListProvider);
+                          if (current >= newSessions.length &&
+                              newSessions.isNotEmpty) {
+                            ref
+                                    .read(selectedSessionIndexProvider.notifier)
+                                    .state =
+                                newSessions.length - 1;
+                          }
+                        },
+                        minimizedImages: minimizedImages,
+                        onImageSelect: (id) {
                           ref
-                                  .read(selectedSessionIndexProvider.notifier)
-                                  .state =
-                              newSessions.length - 1;
-                        }
-                      },
+                              .read(floatingImagesProvider.notifier)
+                              .toggleMinimize(id);
+                        },
+                        onImageClose: (id) {
+                          ref
+                              .read(floatingImagesProvider.notifier)
+                              .removeImage(id);
+                        },
+                      ),
+                    )
+                  : null,
+            ),
+            body: sessions.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.terminal,
+                          size: 64,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'No active sessions',
+                          style: TextStyle(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurface.withValues(alpha: 0.6),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton.icon(
+                          onPressed: () => _showConnectDialog(context, ref),
+                          icon: const Icon(Icons.add),
+                          label: const Text('New Connection'),
+                        ),
+                      ],
                     ),
                   )
-                : null,
+                : _SessionView(sessions: sessions, selectedIndex: clampedIndex),
           ),
-          body: sessions.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.terminal,
-                        size: 64,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'No active sessions',
-                        style: TextStyle(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onSurface.withValues(alpha: 0.6),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      ElevatedButton.icon(
-                        onPressed: () => _showConnectDialog(context, ref),
-                        icon: const Icon(Icons.add),
-                        label: const Text('New Connection'),
-                      ),
-                    ],
-                  ),
-                )
-              : _SessionView(sessions: sessions, selectedIndex: clampedIndex),
         ),
       ),
     );
@@ -148,57 +172,92 @@ class _SessionTabBar extends StatelessWidget {
   final int selectedIndex;
   final void Function(int index) onSelect;
   final void Function(String id) onClose;
+  final List<FloatingImage> minimizedImages;
+  final void Function(String id) onImageSelect;
+  final void Function(String id) onImageClose;
 
   const _SessionTabBar({
     required this.sessions,
     required this.selectedIndex,
     required this.onSelect,
     required this.onClose,
+    this.minimizedImages = const [],
+    required this.onImageSelect,
+    required this.onImageClose,
   });
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       height: 40,
-      child: ListView.builder(
+      child: ListView(
         scrollDirection: Axis.horizontal,
-        itemCount: sessions.length,
-        itemBuilder: (context, index) {
-          final session = sessions[index];
-          final isSelected = index == selectedIndex;
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: GestureDetector(
-              onTap: () => onSelect(index),
-              child: Chip(
-                label: Text(
-                  session.host.name,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isSelected ? Colors.white : Colors.white70,
-                    fontWeight: isSelected
-                        ? FontWeight.bold
-                        : FontWeight.normal,
+        children: [
+          // Session tabs
+          for (int index = 0; index < sessions.length; index++)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: GestureDetector(
+                onTap: () => onSelect(index),
+                child: Chip(
+                  label: Text(
+                    sessions[index].host.name,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: index == selectedIndex
+                          ? Colors.white
+                          : Colors.white70,
+                      fontWeight: index == selectedIndex
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                    ),
                   ),
+                  deleteIcon: const Icon(
+                    Icons.close,
+                    size: 16,
+                    color: Colors.white70,
+                  ),
+                  onDeleted: () => onClose(sessions[index].id),
+                  backgroundColor: index == selectedIndex
+                      ? Colors.teal.shade700
+                      : sessions[index].connected
+                      ? Colors.teal.shade900
+                      : Colors.red.shade900,
+                  side: index == selectedIndex
+                      ? const BorderSide(color: Colors.tealAccent, width: 2)
+                      : null,
                 ),
-                deleteIcon: const Icon(
-                  Icons.close,
-                  size: 16,
-                  color: Colors.white70,
-                ),
-                onDeleted: () => onClose(session.id),
-                backgroundColor: isSelected
-                    ? Colors.teal.shade700
-                    : session.connected
-                    ? Colors.teal.shade900
-                    : Colors.red.shade900,
-                side: isSelected
-                    ? const BorderSide(color: Colors.tealAccent, width: 2)
-                    : null,
               ),
             ),
-          );
-        },
+          // Minimized image tabs
+          if (minimizedImages.isNotEmpty)
+            Container(
+              width: 1,
+              color: Colors.white24,
+              margin: const EdgeInsets.symmetric(vertical: 8),
+            ),
+          for (final img in minimizedImages)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: GestureDetector(
+                onTap: () => onImageSelect(img.id),
+                child: Chip(
+                  avatar: Icon(Icons.image, size: 14, color: Colors.white70),
+                  label: Text(
+                    img.name,
+                    style: const TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                  deleteIcon: const Icon(
+                    Icons.close,
+                    size: 16,
+                    color: Colors.white70,
+                  ),
+                  onDeleted: () => onImageClose(img.id),
+                  backgroundColor: Colors.teal.shade900,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
