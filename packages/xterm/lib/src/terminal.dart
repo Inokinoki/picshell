@@ -968,11 +968,12 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     final size = int.tryParse(params['size'] ?? '0') ?? 0;
     final widthStr = params['width'];
     final heightStr = params['height'];
+    final cursorRow = buffer.cursorY;
 
     if (size > 0) {
-      _assembleChunk(name, base64Data, size, widthStr, heightStr);
+      _assembleChunk(name, base64Data, size, widthStr, heightStr, cursorRow);
     } else {
-      _decodeIterm2Image(name, base64Data, widthStr, heightStr);
+      _decodeIterm2Image(name, base64Data, widthStr, heightStr, cursorRow);
     }
   }
 
@@ -992,6 +993,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     int totalSize,
     String? widthStr,
     String? heightStr,
+    int cursorRow,
   ) {
     final entry = _pendingChunks.putIfAbsent(
       name,
@@ -1002,7 +1004,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     final combined = entry.buffer.join();
     if (combined.length * 3 ~/ 4 >= totalSize) {
       _pendingChunks.remove(name);
-      _decodeIterm2Image(name, combined, widthStr, heightStr);
+      _decodeIterm2Image(name, combined, widthStr, heightStr, cursorRow);
     }
   }
 
@@ -1011,6 +1013,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     String base64Combined,
     String? widthStr,
     String? heightStr,
+    int cursorRow,
   ) async {
     try {
       final bytes = base64.decode(base64Combined);
@@ -1028,7 +1031,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
       final frame = await codec.getNextFrame();
       iterm2Images.add(Iterm2Image(
         image: frame.image,
-        cursorRow: buffer.cursorY,
+        cursorRow: cursorRow,
         widthStr: widthStr,
         heightStr: heightStr,
       ));
