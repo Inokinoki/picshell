@@ -280,6 +280,7 @@ class TerminalPainter {
 
   void paintImages(
     Canvas canvas,
+    Offset offset,
     List<Iterm2Image> images,
     double cellWidth,
     double cellHeight,
@@ -289,17 +290,23 @@ class TerminalPainter {
       final visibleRow = entry.cursorRow - scrollOffset;
       if (visibleRow < -50) continue;
 
-      final y = visibleRow * cellHeight;
-      final imgW = entry.width?.toDouble() ?? entry.image.width.toDouble();
-      final imgH = entry.height?.toDouble() ?? entry.image.height.toDouble();
+      final y = offset.dy + visibleRow * cellHeight;
+      final srcW = entry.image.width.toDouble();
+      final srcH = entry.image.height.toDouble();
 
-      final src = Rect.fromLTWH(
-        0,
-        0,
-        entry.image.width.toDouble(),
-        entry.image.height.toDouble(),
-      );
-      final dst = Rect.fromLTWH(0, y, imgW, imgH);
+      double imgW;
+      double imgH;
+      if (entry.width != null || entry.height != null) {
+        imgW = entry.width?.toDouble() ?? srcW;
+        imgH = entry.height?.toDouble() ?? srcH;
+      } else {
+        final aspectRatio = srcW / srcH;
+        imgW = cellWidth * 20;
+        imgH = imgW / aspectRatio;
+      }
+
+      final src = Rect.fromLTWH(0, 0, srcW, srcH);
+      final dst = Rect.fromLTWH(offset.dx, y, imgW, imgH);
 
       canvas.drawImageRect(entry.image, src, dst, Paint());
     }

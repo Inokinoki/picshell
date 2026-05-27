@@ -423,6 +423,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
     _painter.paintImages(
       canvas,
+      offset,
       _terminal.iterm2Images,
       _painter.cellSize.width,
       _painter.cellSize.height,
