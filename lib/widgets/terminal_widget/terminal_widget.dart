@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
+import '../virtual_keyboard.dart';
 
 class TerminalWidget extends StatefulWidget {
   final Terminal terminal;
@@ -18,6 +19,15 @@ class _TerminalWidgetState extends State<TerminalWidget>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return TerminalView(widget.terminal);
+
+    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    final isKeyboardVisible = keyboardHeight > 0;
+
+    return Column(
+      children: [
+        Expanded(child: TerminalView(widget.terminal)),
+        if (isKeyboardVisible) VirtualKeyboardBar(terminal: widget.terminal),
+      ],
+    );
   }
 }
