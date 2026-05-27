@@ -1,7 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/painting.dart';
 
-import 'package:xterm/src/terminal.dart' show Iterm2Image;
 import 'package:xterm/src/ui/palette_builder.dart';
 import 'package:xterm/src/ui/paragraph_cache.dart';
 import 'package:xterm/xterm.dart';
@@ -276,53 +275,5 @@ class TerminalPainter {
       default:
         return Color(colorValue | 0xFF000000);
     }
-  }
-
-  void paintImages(
-    Canvas canvas,
-    Offset offset,
-    List<Iterm2Image> images,
-    double cellWidth,
-    double cellHeight,
-    int scrollOffset,
-  ) {
-    for (final entry in images) {
-      final visibleRow = entry.cursorRow - scrollOffset;
-      if (visibleRow < -50) continue;
-
-      final y = offset.dy + visibleRow * cellHeight;
-      final srcW = entry.image.width.toDouble();
-      final srcH = entry.image.height.toDouble();
-
-      double imgW;
-      double imgH;
-      if (entry.widthStr != null || entry.heightStr != null) {
-        imgW = _resolveDimension(entry.widthStr, entry.width, srcW, cellWidth,
-            entry.widthIsPixels, entry.widthIsPercent);
-        imgH = _resolveDimension(entry.heightStr, entry.height, srcH,
-            cellHeight, entry.heightIsPixels, entry.heightIsPercent);
-      } else {
-        final aspectRatio = srcW / srcH;
-        imgW = cellWidth * 20;
-        imgH = imgW / aspectRatio;
-      }
-
-      final src = Rect.fromLTWH(0, 0, srcW, srcH);
-      final dst = Rect.fromLTWH(offset.dx, y, imgW, imgH);
-
-      canvas.drawImageRect(entry.image, src, dst, Paint());
-    }
-  }
-
-  double _resolveDimension(String? str, int? value, double srcSize,
-      double cellSize, bool isPixels, bool isPercent) {
-    if (str == null || str == 'auto') return srcSize;
-    if (isPercent) {
-      return srcSize * (value ?? 100) / 100;
-    }
-    if (isPixels) {
-      return (value ?? srcSize.toInt()).toDouble();
-    }
-    return (value ?? 1).toDouble() * cellSize;
   }
 }

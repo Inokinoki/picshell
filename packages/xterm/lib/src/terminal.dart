@@ -48,13 +48,6 @@ class Iterm2Image {
   bool get heightIsPercent => heightStr?.endsWith('%') == true;
 }
 
-class _PendingChunk {
-  final int totalSize;
-  final List<String> buffer = [];
-
-  _PendingChunk({required this.totalSize});
-}
-
 /// [Terminal] is an interface to interact with command line applications. It
 /// translates escape sequences from the application into updates to the
 /// [buffer] and events such as [onTitleChange] or [onBell], as well as
@@ -145,15 +138,6 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   /// The last character written to the buffer. Used to implement some escape
   /// sequences that repeat the last character.
   var _precedingCodepoint = 0;
-
-  /// Pending iTerm2 images waiting to be rendered.
-  final List<Iterm2Image> iterm2Images = [];
-
-  /// Assembler for chunked base64 iTerm2 image data.
-  final Map<String, _PendingChunk> _pendingChunks = {};
-
-  /// Cell height for image rendering (will be updated from render metrics).
-  double cellHeight = 18.0;
 
   /// Callback when an iTerm2 image is decoded.
   /// Receives raw image bytes, filename, and optional width/height from protocol.
@@ -976,11 +960,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     final heightStr = params['height'];
     final cursorRow = buffer.cursorY;
 
-    if (size > 0) {
-      _assembleChunk(name, base64Data, size, widthStr, heightStr, cursorRow);
-    } else {
-      _decodeIterm2Image(name, base64Data, widthStr, heightStr, cursorRow);
-    }
+    _decodeIterm2Image(name, base64Data, widthStr, heightStr, cursorRow);
   }
 
   Map<String, String>? _parseIterm2Params(String s) {
@@ -991,27 +971,6 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
       result[part.substring(0, eq)] = part.substring(eq + 1);
     }
     return result.isEmpty ? null : result;
-  }
-
-  void _assembleChunk(
-    String name,
-    String base64Chunk,
-    int totalSize,
-    String? widthStr,
-    String? heightStr,
-    int cursorRow,
-  ) {
-    final entry = _pendingChunks.putIfAbsent(
-      name,
-      () => _PendingChunk(totalSize: totalSize),
-    );
-    entry.buffer.add(base64Chunk);
-
-    final combined = entry.buffer.join();
-    if (combined.length * 3 ~/ 4 >= totalSize) {
-      _pendingChunks.remove(name);
-      _decodeIterm2Image(name, combined, widthStr, heightStr, cursorRow);
-    }
   }
 
   Future<void> _decodeIterm2Image(

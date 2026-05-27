@@ -421,15 +421,6 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       );
     }
 
-    _painter.paintImages(
-      canvas,
-      offset,
-      _terminal.iterm2Images,
-      _painter.cellSize.width,
-      _painter.cellSize.height,
-      _scrollOffset.toInt(),
-    );
-
     if (_terminal.buffer.absoluteCursorY >= effectFirstLine &&
         _terminal.buffer.absoluteCursorY <= effectLastLine) {
       if (_isComposingText) {
