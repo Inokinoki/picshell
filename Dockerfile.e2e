@@ -31,11 +31,14 @@ if [ ! -f "$FILE" ]; then\n\
 fi\n\
 BASE64=$(base64 -w 0 "$FILE")\n\
 SIZE=$(wc -c < "$FILE")\n\
-printf "\\033]1337;File=inline=1;size=%d:%s\\a\\n" "$SIZE" "$BASE64"\n' > /usr/local/bin/imgcat && \
-    chmod +x /usr/local/bin/imgcat
+printf "\\033]1337;File=inline=1;size=%d:%s\\a\\n" "$SIZE" "$BASE64"\n' > /usr/local/bin/show_image && \
+    chmod +x /usr/local/bin/show_image
+
+# Create output directory
+RUN mkdir -p /test_output /output
 
 COPY build/linux/arm64/release/bundle/ /app/
-COPY test_app.sh /test_app.sh
-RUN chmod +x /test_app.sh
+COPY test_e2e.sh /test_e2e.sh
+RUN chmod +x /test_e2e.sh
 
-CMD ["/test_app.sh"]
+CMD ["/test_e2e.sh"]

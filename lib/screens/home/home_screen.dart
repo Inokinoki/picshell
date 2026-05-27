@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../models/host.dart';
@@ -8,6 +9,10 @@ import '../../widgets/connection_dialog.dart';
 import '../terminal/terminal_screen.dart';
 
 final selectedSessionIndexProvider = StateProvider<int>((ref) => 0);
+
+class _NewConnectionIntent extends Intent {
+  const _NewConnectionIntent();
+}
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -21,78 +26,95 @@ class HomeScreen extends ConsumerWidget {
         ? 0
         : selectedIndex.clamp(0, sessions.length - 1);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Picshell'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.dns),
-            onPressed: () => context.push('/hosts'),
-            tooltip: 'Manage Hosts',
+    return Shortcuts(
+      shortcuts: {
+        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyN):
+            const _NewConnectionIntent(),
+      },
+      child: Actions(
+        actions: {
+          _NewConnectionIntent: CallbackAction<_NewConnectionIntent>(
+            onInvoke: (_) => _showConnectDialog(context, ref),
           ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () => _showConnectDialog(context, ref),
-            tooltip: 'New Connection',
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () => context.push('/settings'),
-            tooltip: 'Settings',
-          ),
-        ],
-        bottom: sessions.isNotEmpty
-            ? PreferredSize(
-                preferredSize: const Size.fromHeight(40),
-                child: _SessionTabBar(
-                  sessions: sessions,
-                  selectedIndex: clampedIndex,
-                  onSelect: (index) =>
-                      ref.read(selectedSessionIndexProvider.notifier).state =
-                          index,
-                  onClose: (id) {
-                    ref.read(sessionListProvider.notifier).closeSession(id);
-                    final current = ref.read(selectedSessionIndexProvider);
-                    final newSessions = ref.read(sessionListProvider);
-                    if (current >= newSessions.length &&
-                        newSessions.isNotEmpty) {
-                      ref.read(selectedSessionIndexProvider.notifier).state =
-                          newSessions.length - 1;
-                    }
-                  },
-                ),
-              )
-            : null,
-      ),
-      body: sessions.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.terminal,
-                    size: 64,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No active sessions',
-                    style: TextStyle(
-                      color: Theme.of(
-                        context,
-                      ).colorScheme.onSurface.withValues(alpha: 0.6),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  ElevatedButton.icon(
-                    onPressed: () => _showConnectDialog(context, ref),
-                    icon: const Icon(Icons.add),
-                    label: const Text('New Connection'),
-                  ),
-                ],
+        },
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text('Picshell'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.dns),
+                onPressed: () => context.push('/hosts'),
+                tooltip: 'Manage Hosts',
               ),
-            )
-          : _SessionView(sessions: sessions, selectedIndex: clampedIndex),
+              IconButton(
+                icon: const Icon(Icons.add),
+                onPressed: () => _showConnectDialog(context, ref),
+                tooltip: 'New Connection (Ctrl+N)',
+              ),
+              IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: () => context.push('/settings'),
+                tooltip: 'Settings',
+              ),
+            ],
+            bottom: sessions.isNotEmpty
+                ? PreferredSize(
+                    preferredSize: const Size.fromHeight(40),
+                    child: _SessionTabBar(
+                      sessions: sessions,
+                      selectedIndex: clampedIndex,
+                      onSelect: (index) =>
+                          ref
+                                  .read(selectedSessionIndexProvider.notifier)
+                                  .state =
+                              index,
+                      onClose: (id) {
+                        ref.read(sessionListProvider.notifier).closeSession(id);
+                        final current = ref.read(selectedSessionIndexProvider);
+                        final newSessions = ref.read(sessionListProvider);
+                        if (current >= newSessions.length &&
+                            newSessions.isNotEmpty) {
+                          ref
+                                  .read(selectedSessionIndexProvider.notifier)
+                                  .state =
+                              newSessions.length - 1;
+                        }
+                      },
+                    ),
+                  )
+                : null,
+          ),
+          body: sessions.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.terminal,
+                        size: 64,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No active sessions',
+                        style: TextStyle(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withValues(alpha: 0.6),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        onPressed: () => _showConnectDialog(context, ref),
+                        icon: const Icon(Icons.add),
+                        label: const Text('New Connection'),
+                      ),
+                    ],
+                  ),
+                )
+              : _SessionView(sessions: sessions, selectedIndex: clampedIndex),
+        ),
+      ),
     );
   }
 

@@ -1,0 +1,29 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    libgtk-3-0 \
+    libglib2.0-0 \
+    xvfb \
+    scrot \
+    libegl1-mesa \
+    libgl1-mesa-dri \
+    libgles2-mesa \
+    openssh-server \
+    xdotool \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure SSH server
+RUN mkdir /var/run/sshd && \
+    echo 'root:picshell' | chpasswd && \
+    echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+# Create output directory
+RUN mkdir -p /test_output /output
+
+COPY build/linux/arm64/release/bundle/ /app/
+COPY test_image.sh /test_image.sh
+RUN chmod +x /test_image.sh
+
+CMD ["/test_image.sh"]
