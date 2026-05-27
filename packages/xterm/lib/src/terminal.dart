@@ -955,12 +955,14 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
     final name = params['name'] ?? '__default__';
     final size = int.tryParse(params['size'] ?? '0') ?? 0;
-    if (size == 0) return;
-
     final width = _parseDimension(params['width']);
     final height = _parseDimension(params['height']);
 
-    _assembleChunk(name, base64Data, size, width, height);
+    if (size > 0) {
+      _assembleChunk(name, base64Data, size, width, height);
+    } else {
+      _decodeIterm2Image(name, base64Data, width, height);
+    }
   }
 
   Map<String, String>? _parseIterm2Params(String s) {
