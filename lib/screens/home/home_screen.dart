@@ -35,6 +35,11 @@ class HomeScreen extends ConsumerWidget {
             onPressed: () => _showConnectDialog(context, ref),
             tooltip: 'New Connection',
           ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () => context.push('/settings'),
+            tooltip: 'Settings',
+          ),
         ],
         bottom: sessions.isNotEmpty
             ? PreferredSize(

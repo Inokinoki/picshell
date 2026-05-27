@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/hosts/host_list_screen.dart';
 import '../screens/hosts/host_edit_screen.dart';
+import '../screens/settings/settings_screen.dart';
 
 final router = GoRouter(
   initialLocation: '/',
@@ -19,6 +20,10 @@ final router = GoRouter(
       path: '/hosts/edit/:id',
       builder: (context, state) =>
           HostEditScreen(hostId: state.pathParameters['id']),
+    ),
+    GoRoute(
+      path: '/settings',
+      builder: (context, state) => const SettingsScreen(),
     ),
   ],
 );
