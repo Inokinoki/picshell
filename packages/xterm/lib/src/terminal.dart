@@ -25,15 +25,26 @@ import 'package:xterm/src/utils/circular_buffer.dart';
 class Iterm2Image {
   final ui.Image image;
   final int cursorRow;
-  final int? width;
-  final int? height;
+  final String? widthStr;
+  final String? heightStr;
 
   Iterm2Image({
     required this.image,
     required this.cursorRow,
-    this.width,
-    this.height,
+    this.widthStr,
+    this.heightStr,
   });
+
+  int? get width => widthStr != null
+      ? int.tryParse(widthStr!.replaceAll(RegExp(r'[^0-9]'), ''))
+      : null;
+  int? get height => heightStr != null
+      ? int.tryParse(heightStr!.replaceAll(RegExp(r'[^0-9]'), ''))
+      : null;
+  bool get widthIsPixels => widthStr?.endsWith('px') == true;
+  bool get heightIsPixels => heightStr?.endsWith('px') == true;
+  bool get widthIsPercent => widthStr?.endsWith('%') == true;
+  bool get heightIsPercent => heightStr?.endsWith('%') == true;
 }
 
 class _PendingChunk {
@@ -955,13 +966,13 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
     final name = params['name'] ?? '__default__';
     final size = int.tryParse(params['size'] ?? '0') ?? 0;
-    final width = _parseDimension(params['width']);
-    final height = _parseDimension(params['height']);
+    final widthStr = params['width'];
+    final heightStr = params['height'];
 
     if (size > 0) {
-      _assembleChunk(name, base64Data, size, width, height);
+      _assembleChunk(name, base64Data, size, widthStr, heightStr);
     } else {
-      _decodeIterm2Image(name, base64Data, width, height);
+      _decodeIterm2Image(name, base64Data, widthStr, heightStr);
     }
   }
 
@@ -975,17 +986,12 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     return result.isEmpty ? null : result;
   }
 
-  int? _parseDimension(String? s) {
-    if (s == null || s == 'auto' || s.endsWith('%')) return null;
-    return int.tryParse(s.replaceAll(RegExp(r'[^0-9]'), ''));
-  }
-
   void _assembleChunk(
     String name,
     String base64Chunk,
     int totalSize,
-    int? width,
-    int? height,
+    String? widthStr,
+    String? heightStr,
   ) {
     final entry = _pendingChunks.putIfAbsent(
       name,
@@ -996,31 +1002,37 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     final combined = entry.buffer.join();
     if (combined.length * 3 ~/ 4 >= totalSize) {
       _pendingChunks.remove(name);
-      _decodeIterm2Image(name, combined, width, height);
+      _decodeIterm2Image(name, combined, widthStr, heightStr);
     }
   }
 
   Future<void> _decodeIterm2Image(
     String name,
     String base64Combined,
-    int? width,
-    int? height,
+    String? widthStr,
+    String? heightStr,
   ) async {
     try {
       final bytes = base64.decode(base64Combined);
+      final widthVal = widthStr != null
+          ? int.tryParse(widthStr.replaceAll(RegExp(r'[^0-9]'), ''))
+          : null;
+      final heightVal = heightStr != null
+          ? int.tryParse(heightStr.replaceAll(RegExp(r'[^0-9]'), ''))
+          : null;
       final codec = await ui.instantiateImageCodec(
         bytes,
-        targetWidth: width,
-        targetHeight: height,
+        targetWidth: widthVal,
+        targetHeight: heightVal,
       );
       final frame = await codec.getNextFrame();
       iterm2Images.add(Iterm2Image(
         image: frame.image,
         cursorRow: buffer.cursorY,
-        width: width,
-        height: height,
+        widthStr: widthStr,
+        heightStr: heightStr,
       ));
-      final imgHeight = height ?? frame.image.height;
+      final imgHeight = heightVal ?? frame.image.height;
       final rows = (imgHeight / cellHeight).ceil();
       for (int i = 0; i < rows; i++) {
         buffer.lineFeed();

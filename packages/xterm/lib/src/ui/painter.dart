@@ -296,9 +296,11 @@ class TerminalPainter {
 
       double imgW;
       double imgH;
-      if (entry.width != null || entry.height != null) {
-        imgW = entry.width?.toDouble() ?? srcW;
-        imgH = entry.height?.toDouble() ?? srcH;
+      if (entry.widthStr != null || entry.heightStr != null) {
+        imgW = _resolveDimension(entry.widthStr, entry.width, srcW, cellWidth,
+            entry.widthIsPixels, entry.widthIsPercent);
+        imgH = _resolveDimension(entry.heightStr, entry.height, srcH,
+            cellHeight, entry.heightIsPixels, entry.heightIsPercent);
       } else {
         final aspectRatio = srcW / srcH;
         imgW = cellWidth * 20;
@@ -310,5 +312,17 @@ class TerminalPainter {
 
       canvas.drawImageRect(entry.image, src, dst, Paint());
     }
+  }
+
+  double _resolveDimension(String? str, int? value, double srcSize,
+      double cellSize, bool isPixels, bool isPercent) {
+    if (str == null || str == 'auto') return srcSize;
+    if (isPercent) {
+      return srcSize * (value ?? 100) / 100;
+    }
+    if (isPixels) {
+      return (value ?? srcSize.toInt()).toDouble();
+    }
+    return (value ?? 1).toDouble() * cellSize;
   }
 }
