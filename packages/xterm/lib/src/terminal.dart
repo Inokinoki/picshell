@@ -955,7 +955,6 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     if (params == null) return;
 
     final name = params['name'] ?? '__default__';
-    final size = int.tryParse(params['size'] ?? '0') ?? 0;
     final widthStr = params['width'];
     final heightStr = params['height'];
     final cursorRow = buffer.cursorY;
