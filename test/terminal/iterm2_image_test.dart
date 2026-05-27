@@ -11,27 +11,24 @@ void main() {
       terminal = Terminal(maxLines: 1000);
     });
 
-    test('should parse basic iTerm2 image sequence', () {
-      // Create a minimal 1x1 red PNG
+    test('should parse basic iTerm2 image sequence and fire callback', () {
       final pngBytes = _createMinimalPng();
       final base64Data = base64.encode(pngBytes);
 
       final oscData = 'File=inline=1;size=${pngBytes.length}:$base64Data';
 
-      // Initially no images
-      expect(terminal.iterm2Images.isEmpty, true);
+      final received = <Map<String, dynamic>>[];
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+        received.add({'bytes': bytes, 'name': name, 'w': w, 'h': h});
+      };
 
-      // Simulate receiving the OSC sequence
       terminal.unknownOSC('1337', [oscData]);
 
-      // Allow async decoding to complete
-      expect(terminal.iterm2Images.isEmpty, true);
+      expect(received.length, 1);
+      expect(received[0]['name'], '__default__');
     });
 
     test('should parse iTerm2 params correctly', () {
-      final terminal = Terminal(maxLines: 1000);
-
-      // Test the parsing via a helper
       final params = _parseIterm2Params('name=test.png,width=200,height=100');
       expect(params['name'], 'test.png');
       expect(params['width'], '200');
@@ -42,64 +39,60 @@ void main() {
       final pngBytes = _createMinimalPng();
       final base64Data = base64.encode(pngBytes);
 
-      // Without size parameter - should still try to decode
       final oscData = 'File=inline=1:$base64Data';
+
+      final received = <String>[];
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+        received.add(name);
+      };
 
       terminal.unknownOSC('1337', [oscData]);
 
-      // Should not throw
-      expect(terminal.iterm2Images.isEmpty, true);
+      expect(received.length, 1);
     });
 
-    test('should handle chunked image data', () {
-      final terminal = Terminal(maxLines: 1000);
+    test('should handle image data with width and height params', () {
       final pngBytes = _createMinimalPng();
       final base64Data = base64.encode(pngBytes);
 
-      // Split into chunks
-      final chunk1 = base64Data.substring(0, 10);
-      final chunk2 = base64Data.substring(10);
+      final oscData = 'File=inline=1,width=200px,height=100px:${base64Data}';
 
-      // Send first chunk
-      terminal.unknownOSC('1337', [
-        'File=inline=1;size=${pngBytes.length};name=test:$chunk1',
-      ]);
+      final received = <Map<String, dynamic>>[];
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+        received.add({'w': w, 'h': h});
+      };
 
-      // Send second chunk
-      terminal.unknownOSC('1337', [
-        'File=inline=1;size=${pngBytes.length};name=test:$chunk2',
-      ]);
+      terminal.unknownOSC('1337', [oscData]);
 
-      // Should not throw
-      expect(terminal.iterm2Images.isEmpty, true);
+      expect(received.length, 1);
+      expect(received[0]['w'], 200);
+      expect(received[0]['h'], 100);
     });
 
     test('should ignore non-1337 OSC sequences', () {
-      final terminal = Terminal(maxLines: 1000);
+      var called = false;
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+        called = true;
+      };
 
-      // Should not throw for non-1337 sequences
       terminal.unknownOSC('0', ['test']);
       terminal.unknownOSC('2', ['title']);
 
-      expect(terminal.iterm2Images.isEmpty, true);
+      expect(called, false);
     });
   });
 }
 
 /// Create a minimal valid PNG (1x1 red pixel)
 Uint8List _createMinimalPng() {
-  // PNG signature
   final signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
-  // IHDR chunk (1x1, 8-bit RGB)
   final ihdr = _createChunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
 
-  // IDAT chunk (1 pixel, filter none, red)
-  final idatData = [0, 255, 0, 0]; // filter=none, R=255, G=0, B=0
+  final idatData = [0, 255, 0, 0];
   final compressed = _zlibCompress(idatData);
   final idat = _createChunk('IDAT', compressed);
 
-  // IEND chunk
   final iend = _createChunk('IEND', []);
 
   return Uint8List.fromList([...signature, ...ihdr, ...idat, ...iend]);
@@ -142,8 +135,6 @@ int _crc32(List<int> data) {
 }
 
 List<int> _zlibCompress(List<int> data) {
-  // Minimal zlib compression for single pixel
-  // This is a simplified version - real implementation would use proper compression
   return [
     0x78,
     0x01,
