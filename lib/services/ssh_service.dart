@@ -33,6 +33,8 @@ class SshService {
       StreamController.broadcast();
   final StreamController<bool> _connectionController =
       StreamController.broadcast();
+  StreamSubscription<Uint8List>? _stdoutSubscription;
+  StreamSubscription<Uint8List>? _stderrSubscription;
 
   Stream<String> get output => _outputController.stream;
   Stream<bool> get connectionState => _connectionController.stream;
@@ -85,10 +87,17 @@ class SshService {
 
       _session!.stdout.listen(
         (Uint8List data) => _outputController.add(utf8.decode(data)),
+        onError: (e) {
+          _connectionController.add(false);
+        },
+        onDone: () {
+          _connectionController.add(false);
+        },
       );
 
       _session!.stderr.listen(
         (Uint8List data) => _outputController.add(utf8.decode(data)),
+        onError: (e) {},
       );
 
       _connectionController.add(true);
@@ -107,6 +116,10 @@ class SshService {
   }
 
   void disconnect() {
+    _stdoutSubscription?.cancel();
+    _stderrSubscription?.cancel();
+    _stdoutSubscription = null;
+    _stderrSubscription = null;
     _session?.close();
     _client?.close();
     _client = null;

@@ -30,6 +30,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
   Future<void> openSession(Host host, SshConnectionConfig config) async {
     final service = SshService();
     final terminal = Terminal(maxLines: 10000);
+    final sessionId = '${host.id}_${DateTime.now().millisecondsSinceEpoch}';
 
     terminal.onOutput = (data) {
       service.writeToTerminal(data);
@@ -39,7 +40,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     };
 
     final session = SessionState(
-      id: host.id,
+      id: sessionId,
       host: host,
       sshService: service,
       terminal: terminal,
