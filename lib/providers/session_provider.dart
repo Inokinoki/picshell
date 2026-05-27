@@ -1,7 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 import 'package:xterm/xterm.dart';
 import '../models/host.dart';
 import '../services/ssh_service.dart';
+
+const _uuid = Uuid();
 
 class SessionState {
   final String id;
@@ -9,6 +12,7 @@ class SessionState {
   final SshService sshService;
   final Terminal terminal;
   final bool connected;
+  final DateTime createdAt;
 
   SessionState({
     required this.id,
@@ -16,7 +20,9 @@ class SessionState {
     required this.sshService,
     Terminal? terminal,
     this.connected = false,
-  }) : terminal = terminal ?? Terminal(maxLines: 10000);
+    DateTime? createdAt,
+  }) : terminal = terminal ?? Terminal(maxLines: 10000),
+       createdAt = createdAt ?? DateTime.now();
 }
 
 final sessionListProvider =
@@ -30,7 +36,8 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
   Future<void> openSession(Host host, SshConnectionConfig config) async {
     final service = SshService();
     final terminal = Terminal(maxLines: 10000);
-    final sessionId = '${host.id}_${DateTime.now().millisecondsSinceEpoch}';
+    final sessionId = _uuid.v4();
+    final createdAt = DateTime.now();
 
     terminal.onOutput = (data) {
       service.writeToTerminal(data);
@@ -44,6 +51,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       host: host,
       sshService: service,
       terminal: terminal,
+      createdAt: createdAt,
     );
     state = [...state, session];
 
