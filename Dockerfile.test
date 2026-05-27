@@ -1,0 +1,22 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    libgtk-3-0 \
+    libglib2.0-0 \
+    xvfb \
+    scrot \
+    libegl1-mesa \
+    libgl1-mesa-dri \
+    libgles2-mesa \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY build/linux/arm64/release/bundle/ /app/
+
+ENV DISPLAY=:99
+
+CMD Xvfb :99 -screen 0 1024x768x24 & \
+    sleep 2 && \
+    /app/picshell & \
+    sleep 3 && \
+    scrot /tmp/screenshot.png && \
+    cp /tmp/screenshot.png /output/screenshot.png

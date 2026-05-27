@@ -69,11 +69,19 @@ class HomeScreen extends ConsumerWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.terminal, size: 64, color: Colors.grey),
+                  Icon(
+                    Icons.terminal,
+                    size: 64,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                   const SizedBox(height: 16),
-                  const Text(
+                  Text(
                     'No active sessions',
-                    style: TextStyle(color: Colors.grey),
+                    style: TextStyle(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   ElevatedButton.icon(
