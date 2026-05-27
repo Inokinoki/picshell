@@ -1,0 +1,67 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    libgtk-3-0 \
+    libglib2.0-0 \
+    xvfb \
+    scrot \
+    libegl1-mesa \
+    libgl1-mesa-dri \
+    libgles2-mesa \
+    openssh-server \
+    xdotool \
+    python3 \
+    git \
+    curl \
+    unzip \
+    clang \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libgtk-3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Flutter SDK
+RUN git clone https://github.com/flutter/flutter.git -b stable --depth 1 /opt/flutter
+ENV PATH="/opt/flutter/bin:${PATH}"
+RUN flutter doctor -v
+
+# Configure SSH server
+RUN mkdir /var/run/sshd && \
+    echo 'root:picshell' | chpasswd && \
+    echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+# Create output directory
+RUN mkdir -p /test_output /output
+
+# Copy source code
+COPY . /app
+WORKDIR /app
+
+# Build Flutter Linux app
+RUN flutter pub get
+RUN flutter build linux
+
+# Create test_image script
+RUN echo '#!/bin/bash\n\
+python3 -c "\n\
+import base64\n\
+png = bytes([\n\
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,\n\
+    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,\n\
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,\n\
+    0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,\n\
+    0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,\n\
+    0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,\n\
+    0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC,\n\
+    0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,\n\
+    0x44, 0xAE, 0x42, 0x60, 0x82\n\
+])\n\
+b64 = base64.b64encode(png).decode()\n\
+print(f"\\033]1337;File=inline=1;size={len(png)}:{b64}\\a")\n\
+echo "Image displayed!"\n\
+"' > /usr/local/bin/test_image && \
+    chmod +x /usr/local/bin/test_image
+
+CMD ["/bin/bash"]
