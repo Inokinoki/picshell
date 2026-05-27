@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
 class VirtualKeyboardBar extends StatefulWidget {
   final Terminal terminal;
+  final TerminalController? controller;
 
-  const VirtualKeyboardBar({super.key, required this.terminal});
+  const VirtualKeyboardBar({
+    super.key,
+    required this.terminal,
+    this.controller,
+  });
 
   @override
   State<VirtualKeyboardBar> createState() => _VirtualKeyboardBarState();
@@ -37,6 +43,9 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
           _buildKey('←', onTap: () => _sendArrow(TerminalKey.arrowLeft)),
           _buildKey('→', onTap: () => _sendArrow(TerminalKey.arrowRight)),
           const SizedBox(width: 8),
+          _buildKey('Copy', icon: Icons.copy, onTap: _copySelection),
+          _buildKey('Paste', icon: Icons.paste, onTap: _paste),
+          const SizedBox(width: 8),
           _buildKey('|', onTap: () => _sendChar('|')),
           _buildKey('~', onTap: () => _sendChar('~')),
           _buildKey('-', onTap: () => _sendChar('-')),
@@ -47,7 +56,11 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
     );
   }
 
-  Widget _buildKey(String label, {required VoidCallback onTap}) {
+  Widget _buildKey(
+    String label, {
+    IconData? icon,
+    required VoidCallback onTap,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 3),
       child: Material(
@@ -58,14 +71,16 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
           borderRadius: BorderRadius.circular(6),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
+            child: icon != null
+                ? Icon(icon, color: Colors.white, size: 18)
+                : Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
           ),
         ),
       ),
@@ -122,6 +137,65 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
       }
     } else {
       widget.terminal.textInput(char);
+    }
+    _resetModifiers();
+  }
+
+  void _copySelection() {
+    final controller = widget.controller;
+    if (controller == null) return;
+
+    final selection = controller.selection;
+    if (selection == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Long press and drag to select text first'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final buffer = widget.terminal.buffer;
+    final text = StringBuffer();
+
+    for (var y = selection.begin.y; y <= selection.end.y; y++) {
+      final line = buffer.lines[y];
+
+      final startX = y == selection.begin.y ? selection.begin.x : 0;
+      final endX = y == selection.end.y ? selection.end.x : line.length - 1;
+
+      for (var x = startX; x <= endX; x++) {
+        final charCode = line.getCodePoint(x);
+        if (charCode != 0) {
+          text.writeCharCode(charCode);
+        }
+      }
+
+      if (y < selection.end.y) {
+        text.write('\n');
+      }
+    }
+
+    final selectedText = text.toString();
+    if (selectedText.isNotEmpty) {
+      Clipboard.setData(ClipboardData(text: selectedText));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Copied ${selectedText.length} characters'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    }
+
+    controller.clearSelection();
+    _resetModifiers();
+  }
+
+  void _paste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data?.text != null) {
+      widget.terminal.textInput(data!.text!);
     }
     _resetModifiers();
   }

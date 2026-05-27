@@ -19,6 +19,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     with AutomaticKeepAliveClientMixin {
   late final KeyboardVisibilityController _keyboardController;
   late final StreamSubscription<bool> _keyboardSubscription;
+  late final TerminalController _terminalController;
   bool _isKeyboardVisible = false;
 
   @override
@@ -33,11 +34,13 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
         });
       }
     });
+    _terminalController = TerminalController();
   }
 
   @override
   void dispose() {
     _keyboardSubscription.cancel();
+    _terminalController.dispose();
     super.dispose();
   }
 
@@ -65,8 +68,14 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
 
     return Column(
       children: [
-        Expanded(child: TerminalView(widget.terminal)),
-        if (showKeyboard) VirtualKeyboardBar(terminal: widget.terminal),
+        Expanded(
+          child: TerminalView(widget.terminal, controller: _terminalController),
+        ),
+        if (showKeyboard)
+          VirtualKeyboardBar(
+            terminal: widget.terminal,
+            controller: _terminalController,
+          ),
       ],
     );
   }
