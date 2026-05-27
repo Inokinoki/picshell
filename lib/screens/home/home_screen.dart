@@ -7,12 +7,19 @@ import '../../services/ssh_service.dart';
 import '../../widgets/connection_dialog.dart';
 import '../terminal/terminal_screen.dart';
 
+final selectedSessionIndexProvider = StateProvider<int>((ref) => 0);
+
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final sessions = ref.watch(sessionListProvider);
+    final selectedIndex = ref.watch(selectedSessionIndexProvider);
+
+    final clampedIndex = sessions.isEmpty
+        ? 0
+        : selectedIndex.clamp(0, sessions.length - 1);
 
     return Scaffold(
       appBar: AppBar(
@@ -34,8 +41,20 @@ class HomeScreen extends ConsumerWidget {
                 preferredSize: const Size.fromHeight(40),
                 child: _SessionTabBar(
                   sessions: sessions,
-                  onClose: (id) =>
-                      ref.read(sessionListProvider.notifier).closeSession(id),
+                  selectedIndex: clampedIndex,
+                  onSelect: (index) =>
+                      ref.read(selectedSessionIndexProvider.notifier).state =
+                          index,
+                  onClose: (id) {
+                    ref.read(sessionListProvider.notifier).closeSession(id);
+                    final current = ref.read(selectedSessionIndexProvider);
+                    final newSessions = ref.read(sessionListProvider);
+                    if (current >= newSessions.length &&
+                        newSessions.isNotEmpty) {
+                      ref.read(selectedSessionIndexProvider.notifier).state =
+                          newSessions.length - 1;
+                    }
+                  },
                 ),
               )
             : null,
@@ -60,7 +79,7 @@ class HomeScreen extends ConsumerWidget {
                 ],
               ),
             )
-          : _SessionView(sessions: sessions),
+          : _SessionView(sessions: sessions, selectedIndex: clampedIndex),
     );
   }
 
@@ -73,6 +92,9 @@ class HomeScreen extends ConsumerWidget {
             await ref
                 .read(sessionListProvider.notifier)
                 .openSession(host, config);
+            final newSessions = ref.read(sessionListProvider);
+            ref.read(selectedSessionIndexProvider.notifier).state =
+                newSessions.length - 1;
           } catch (e) {
             if (context.mounted) {
               ScaffoldMessenger.of(
@@ -88,9 +110,16 @@ class HomeScreen extends ConsumerWidget {
 
 class _SessionTabBar extends StatelessWidget {
   final List<SessionState> sessions;
+  final int selectedIndex;
+  final void Function(int index) onSelect;
   final void Function(String id) onClose;
 
-  const _SessionTabBar({required this.sessions, required this.onClose});
+  const _SessionTabBar({
+    required this.sessions,
+    required this.selectedIndex,
+    required this.onSelect,
+    required this.onClose,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -101,18 +130,37 @@ class _SessionTabBar extends StatelessWidget {
         itemCount: sessions.length,
         itemBuilder: (context, index) {
           final session = sessions[index];
+          final isSelected = index == selectedIndex;
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Chip(
-              label: Text(
-                session.host.name,
-                style: const TextStyle(fontSize: 12),
+            child: GestureDetector(
+              onTap: () => onSelect(index),
+              child: Chip(
+                label: Text(
+                  session.host.name,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isSelected ? Colors.white : Colors.white70,
+                    fontWeight: isSelected
+                        ? FontWeight.bold
+                        : FontWeight.normal,
+                  ),
+                ),
+                deleteIcon: const Icon(
+                  Icons.close,
+                  size: 16,
+                  color: Colors.white70,
+                ),
+                onDeleted: () => onClose(session.id),
+                backgroundColor: isSelected
+                    ? Colors.teal.shade700
+                    : session.connected
+                    ? Colors.teal.shade900
+                    : Colors.red.shade900,
+                side: isSelected
+                    ? const BorderSide(color: Colors.tealAccent, width: 2)
+                    : null,
               ),
-              deleteIcon: const Icon(Icons.close, size: 16),
-              onDeleted: () => onClose(session.id),
-              backgroundColor: session.connected
-                  ? Colors.teal.shade900
-                  : Colors.red.shade900,
             ),
           );
         },
@@ -123,12 +171,13 @@ class _SessionTabBar extends StatelessWidget {
 
 class _SessionView extends StatelessWidget {
   final List<SessionState> sessions;
+  final int selectedIndex;
 
-  const _SessionView({required this.sessions});
+  const _SessionView({required this.sessions, required this.selectedIndex});
 
   @override
   Widget build(BuildContext context) {
-    final session = sessions.last;
+    final session = sessions[selectedIndex];
     return TerminalScreen(terminal: session.terminal);
   }
 }
