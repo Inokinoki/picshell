@@ -944,11 +944,11 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     if (!data.startsWith('File=')) return;
 
     final afterPrefix = data.substring('File='.length);
-    final semiIndex = afterPrefix.indexOf(';');
-    if (semiIndex == -1) return;
+    final colonIndex = afterPrefix.indexOf(':');
+    if (colonIndex == -1) return;
 
-    final paramsStr = afterPrefix.substring(0, semiIndex);
-    final base64Data = afterPrefix.substring(semiIndex + 1);
+    final paramsStr = afterPrefix.substring(0, colonIndex);
+    final base64Data = afterPrefix.substring(colonIndex + 1);
 
     final params = _parseIterm2Params(paramsStr);
     if (params == null) return;
