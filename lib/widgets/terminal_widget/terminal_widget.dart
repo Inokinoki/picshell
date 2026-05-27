@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:xterm/xterm.dart';
 import '../../providers/settings_provider.dart';
 import '../virtual_keyboard.dart';
@@ -15,6 +17,30 @@ class TerminalWidget extends ConsumerStatefulWidget {
 
 class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     with AutomaticKeepAliveClientMixin {
+  late final KeyboardVisibilityController _keyboardController;
+  late final StreamSubscription<bool> _keyboardSubscription;
+  bool _isKeyboardVisible = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _keyboardController = KeyboardVisibilityController();
+    _isKeyboardVisible = _keyboardController.isVisible;
+    _keyboardSubscription = _keyboardController.onChange.listen((visible) {
+      if (mounted) {
+        setState(() {
+          _isKeyboardVisible = visible;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _keyboardSubscription.cancel();
+    super.dispose();
+  }
+
   @override
   bool get wantKeepAlive => true;
 
@@ -23,13 +49,11 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     super.build(context);
 
     final settings = ref.watch(settingsProvider);
-    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
-    final isKeyboardVisible = keyboardHeight > 0;
 
     bool showKeyboard;
     switch (settings.keyboardBarMode) {
       case KeyboardBarMode.auto:
-        showKeyboard = isKeyboardVisible;
+        showKeyboard = _isKeyboardVisible;
         break;
       case KeyboardBarMode.always:
         showKeyboard = true;
