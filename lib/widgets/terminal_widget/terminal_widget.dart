@@ -16,15 +16,17 @@ class TerminalWidget extends ConsumerStatefulWidget {
 }
 
 class _TerminalWidgetState extends ConsumerState<TerminalWidget>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
   late final KeyboardVisibilityController _keyboardController;
   late final StreamSubscription<bool> _keyboardSubscription;
   late final TerminalController _terminalController;
+  late final FocusNode _focusNode;
   bool _isKeyboardVisible = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _keyboardController = KeyboardVisibilityController();
     _isKeyboardVisible = _keyboardController.isVisible;
     _keyboardSubscription = _keyboardController.onChange.listen((visible) {
@@ -35,13 +37,23 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
       }
     });
     _terminalController = TerminalController();
+    _focusNode = FocusNode();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _keyboardSubscription.cancel();
     _terminalController.dispose();
+    _focusNode.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      _focusNode.requestFocus();
+    }
   }
 
   @override
@@ -69,7 +81,11 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     return Column(
       children: [
         Expanded(
-          child: TerminalView(widget.terminal, controller: _terminalController),
+          child: TerminalView(
+            widget.terminal,
+            controller: _terminalController,
+            focusNode: _focusNode,
+          ),
         ),
         if (showKeyboard)
           VirtualKeyboardBar(
