@@ -220,6 +220,8 @@ class _SessionTabBar extends StatelessWidget {
                   onDeleted: () => onClose(sessions[index].id),
                   backgroundColor: index == selectedIndex
                       ? Colors.teal.shade700
+                      : sessions[index].reconnecting
+                      ? Colors.amber.shade900
                       : sessions[index].connected
                       ? Colors.teal.shade900
                       : Colors.red.shade900,
