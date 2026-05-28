@@ -35,14 +35,33 @@ class SshService {
       StreamController.broadcast();
   StreamSubscription<Uint8List>? _stdoutSubscription;
   StreamSubscription<Uint8List>? _stderrSubscription;
+  bool _disposed = false;
 
   Stream<String> get output => _outputController.stream;
   Stream<bool> get connectionState => _connectionController.stream;
   bool get isConnected => _client != null && _session != null;
 
+  void _safeAddOutput(String data) {
+    if (!_disposed && !_outputController.isClosed) {
+      _outputController.add(data);
+    }
+  }
+
+  void _safeAddConnection(bool value) {
+    if (!_disposed && !_connectionController.isClosed) {
+      _connectionController.add(value);
+    }
+  }
+
+  void _safeAddConnectionError(Object e) {
+    if (!_disposed && !_connectionController.isClosed) {
+      _connectionController.addError(e);
+    }
+  }
+
   Future<void> connect(SshConnectionConfig config) async {
     try {
-      _connectionController.add(false);
+      _safeAddConnection(false);
 
       final socket = await SSHSocket.connect(config.host, config.port);
 
@@ -85,24 +104,24 @@ class SshService {
         pty: const SSHPtyConfig(width: 80, height: 24, type: 'xterm-256color'),
       );
 
-      _session!.stdout.listen(
-        (Uint8List data) => _outputController.add(utf8.decode(data)),
+      _stdoutSubscription = _session!.stdout.listen(
+        (Uint8List data) => _safeAddOutput(utf8.decode(data)),
         onError: (e) {
-          _connectionController.add(false);
+          _safeAddConnection(false);
         },
         onDone: () {
-          _connectionController.add(false);
+          _safeAddConnection(false);
         },
       );
 
-      _session!.stderr.listen(
-        (Uint8List data) => _outputController.add(utf8.decode(data)),
+      _stderrSubscription = _session!.stderr.listen(
+        (Uint8List data) => _safeAddOutput(utf8.decode(data)),
         onError: (e) {},
       );
 
-      _connectionController.add(true);
+      _safeAddConnection(true);
     } catch (e) {
-      _connectionController.addError(e);
+      _safeAddConnectionError(e);
       rethrow;
     }
   }
@@ -124,12 +143,13 @@ class SshService {
     _client?.close();
     _client = null;
     _session = null;
-    _connectionController.add(false);
+    _safeAddConnection(false);
   }
 
   void dispose() {
+    _disposed = true;
     disconnect();
-    _outputController.close();
-    _connectionController.close();
+    if (!_outputController.isClosed) _outputController.close();
+    if (!_connectionController.isClosed) _connectionController.close();
   }
 }
