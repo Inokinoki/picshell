@@ -935,6 +935,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   @override
   void unknownOSC(String ps, List<String> pt) {
     if (ps == '1337' && pt.isNotEmpty) {
+      print('[iTerm2] OSC 1337 received, parts=${pt.length}, firstPart=${pt.first.length} chars');
       _handleIterm2File(pt.join(';'));
     } else {
       onPrivateOSC?.call(ps, pt);
@@ -942,23 +943,33 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   }
 
   void _handleIterm2File(String data) {
-    if (!data.startsWith('File=')) return;
+    if (!data.startsWith('File=')) {
+      print('[iTerm2] rejected: no File= prefix, got: ${data.substring(0, data.length > 30 ? 30 : data.length)}');
+      return;
+    }
 
     final afterPrefix = data.substring('File='.length);
     final colonIndex = afterPrefix.indexOf(':');
-    if (colonIndex == -1) return;
+    if (colonIndex == -1) {
+      print('[iTerm2] rejected: no colon found');
+      return;
+    }
 
     final paramsStr = afterPrefix.substring(0, colonIndex);
     final base64Data = afterPrefix.substring(colonIndex + 1);
 
     final params = _parseIterm2Params(paramsStr);
-    if (params == null) return;
+    if (params == null) {
+      print('[iTerm2] rejected: params parse returned null for "$paramsStr"');
+      return;
+    }
 
     final name = params['name'] ?? '__default__';
     final widthStr = params['width'];
     final heightStr = params['height'];
     final cursorRow = buffer.cursorY;
 
+    print('[iTerm2] decoding: name=$name, base64Len=${base64Data.length}, params=$params');
     _decodeIterm2Image(name, base64Data, widthStr, heightStr, cursorRow);
   }
 
@@ -981,6 +992,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   ) async {
     try {
       final bytes = base64.decode(base64Combined);
+      print('[iTerm2] base64 decoded OK, ${bytes.length} bytes');
       final widthVal = widthStr != null
           ? int.tryParse(widthStr.replaceAll(RegExp(r'[^0-9]'), ''))
           : null;
@@ -989,10 +1001,14 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
           : null;
 
       if (onImageDecoded != null) {
+        print('[iTerm2] firing onImageDecoded callback');
         onImageDecoded!(bytes, name, widthVal, heightVal);
+      } else {
+        print('[iTerm2] WARNING: onImageDecoded is null!');
       }
-    } catch (_) {
-      // Ignore decode errors
+    } catch (e, stack) {
+      print('[iTerm2] ERROR decoding: $e');
+      print(stack);
     }
   }
 }
