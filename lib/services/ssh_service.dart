@@ -105,7 +105,7 @@ class SshService {
       );
 
       _stdoutSubscription = _session!.stdout.listen(
-        (Uint8List data) => _safeAddOutput(utf8.decode(data)),
+        (Uint8List data) => _safeAddOutput(utf8.decode(data, allowMalformed: true)),
         onError: (e) {
           _safeAddConnection(false);
         },
@@ -115,7 +115,7 @@ class SshService {
       );
 
       _stderrSubscription = _session!.stderr.listen(
-        (Uint8List data) => _safeAddOutput(utf8.decode(data)),
+        (Uint8List data) => _safeAddOutput(utf8.decode(data, allowMalformed: true)),
         onError: (e) {},
       );
 
