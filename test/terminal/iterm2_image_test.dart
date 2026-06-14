@@ -80,6 +80,83 @@ void main() {
 
       expect(called, false);
     });
+
+    test('callback receives correct raw PNG bytes', () {
+      final pngBytes = _createMinimalPng();
+      final base64Data = base64.encode(pngBytes);
+
+      Uint8List? receivedBytes;
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+        receivedBytes = bytes;
+      };
+
+      terminal.unknownOSC('1337', ['File=inline=1:$base64Data']);
+
+      expect(receivedBytes, isNotNull);
+      expect(receivedBytes!.length, pngBytes.length);
+      expect(receivedBytes, pngBytes);
+    });
+
+    test('should not fire callback for invalid base64', () {
+      var called = false;
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+        called = true;
+      };
+
+      terminal.unknownOSC('1337', ['File=inline=1:not_valid_base64!!!']);
+
+      expect(called, false);
+    });
+
+    test('should not fire callback for missing File= prefix', () {
+      var called = false;
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? h, int? w) {
+        called = true;
+      };
+
+      terminal.unknownOSC('1337', ['something_else=1:base64data']);
+
+      expect(called, false);
+    });
+
+    test('should not fire callback when no callback is set', () {
+      final pngBytes = _createMinimalPng();
+      final base64Data = base64.encode(pngBytes);
+
+      expect(
+        () => terminal.unknownOSC('1337', ['File=inline=1:$base64Data']),
+        returnsNormally,
+      );
+    });
+
+    test('should handle empty payload after colon', () {
+      Uint8List? receivedBytes;
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+        receivedBytes = bytes;
+      };
+
+      terminal.unknownOSC('1337', ['File=inline=1:']);
+
+      expect(receivedBytes, isNotNull);
+      expect(receivedBytes!.length, 0);
+    });
+
+    test('should parse name parameter correctly', () {
+      final pngBytes = _createMinimalPng();
+      final base64Data = base64.encode(pngBytes);
+
+      String? receivedName;
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+        receivedName = name;
+      };
+
+      terminal.unknownOSC(
+        '1337',
+        ['File=inline=1,name=photo.png:$base64Data'],
+      );
+
+      expect(receivedName, 'photo.png');
+    });
   });
 }
 
