@@ -975,7 +975,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
   Map<String, String>? _parseIterm2Params(String s) {
     final result = <String, String>{};
-    for (final part in s.split(',')) {
+    for (final part in s.split(';')) {
       final eq = part.indexOf('=');
       if (eq == -1) continue;
       result[part.substring(0, eq)] = part.substring(eq + 1);

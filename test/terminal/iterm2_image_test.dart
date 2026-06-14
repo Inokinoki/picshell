@@ -29,7 +29,7 @@ void main() {
     });
 
     test('should parse iTerm2 params correctly', () {
-      final params = _parseIterm2Params('name=test.png,width=200,height=100');
+      final params = _parseIterm2Params('name=test.png;width=200;height=100');
       expect(params['name'], 'test.png');
       expect(params['width'], '200');
       expect(params['height'], '100');
@@ -55,7 +55,7 @@ void main() {
       final pngBytes = _createMinimalPng();
       final base64Data = base64.encode(pngBytes);
 
-      final oscData = 'File=inline=1,width=200px,height=100px:${base64Data}';
+      final oscData = 'File=inline=1;width=200px;height=100px:${base64Data}';
 
       final received = <Map<String, dynamic>>[];
       terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
@@ -152,7 +152,7 @@ void main() {
 
       terminal.unknownOSC(
         '1337',
-        ['File=inline=1,name=photo.png:$base64Data'],
+        ['File=inline=1;name=photo.png:$base64Data'],
       );
 
       expect(receivedName, 'photo.png');
@@ -235,7 +235,7 @@ List<int> _zlibCompress(List<int> data) {
 
 Map<String, String> _parseIterm2Params(String s) {
   final result = <String, String>{};
-  for (final part in s.split(',')) {
+  for (final part in s.split(';')) {
     final eq = part.indexOf('=');
     if (eq == -1) continue;
     result[part.substring(0, eq)] = part.substring(eq + 1);
