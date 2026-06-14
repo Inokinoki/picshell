@@ -258,6 +258,225 @@ void main() {
       container.dispose();
     });
   });
+
+  group('FloatingImageOverlay positioning', () {
+    late Uint8List testPngBytes;
+
+    setUpAll(() {
+      testPngBytes = _createMinimalPng();
+    });
+
+    test('addImage assigns default cascade offset position', () {
+      final container = ProviderContainer();
+      final notifier = container.read(floatingImagesProvider.notifier);
+
+      notifier.addImage(FloatingImage(
+        id: 'img-1',
+        rawBytes: testPngBytes,
+        name: 'a.png',
+      ));
+      notifier.addImage(FloatingImage(
+        id: 'img-2',
+        rawBytes: testPngBytes,
+        name: 'b.png',
+      ));
+
+      final images = container.read(floatingImagesProvider);
+      expect(images[0].position, isNot(Offset.zero));
+      expect(images[1].position, isNot(Offset.zero));
+      expect(images[0].position, isNot(images[1].position));
+
+      container.dispose();
+    });
+
+    test('addImage cascades positions by 30px increments', () {
+      final container = ProviderContainer();
+      final notifier = container.read(floatingImagesProvider.notifier);
+
+      notifier.addImage(FloatingImage(
+        id: 'img-1',
+        rawBytes: testPngBytes,
+        name: 'a.png',
+      ));
+      notifier.addImage(FloatingImage(
+        id: 'img-2',
+        rawBytes: testPngBytes,
+        name: 'b.png',
+      ));
+
+      final images = container.read(floatingImagesProvider);
+      final dx = images[1].position.dx - images[0].position.dx;
+      final dy = images[1].position.dy - images[0].position.dy;
+      expect(dx, 30.0);
+      expect(dy, 30.0);
+
+      container.dispose();
+    });
+
+    test('updatePosition changes widget position', () {
+      final container = ProviderContainer();
+      final notifier = container.read(floatingImagesProvider.notifier);
+
+      notifier.addImage(FloatingImage(
+        id: 'img-1',
+        rawBytes: testPngBytes,
+        name: 'a.png',
+      ));
+
+      final newPos = const Offset(200, 300);
+      notifier.updatePosition('img-1', newPos);
+
+      final images = container.read(floatingImagesProvider);
+      expect(images[0].position, newPos);
+
+      container.dispose();
+    });
+
+    test('position persists through minimize then restore', () {
+      final container = ProviderContainer();
+      final notifier = container.read(floatingImagesProvider.notifier);
+
+      notifier.addImage(FloatingImage(
+        id: 'img-1',
+        rawBytes: testPngBytes,
+        name: 'a.png',
+      ));
+
+      final originalPos = container
+          .read(floatingImagesProvider)
+          .first
+          .position;
+
+      notifier.toggleMinimize('img-1');
+      final minimized = container.read(floatingImagesProvider).first;
+      expect(minimized.minimized, true);
+      expect(minimized.position, originalPos);
+
+      notifier.toggleMinimize('img-1');
+      final restored = container.read(floatingImagesProvider).first;
+      expect(restored.minimized, false);
+      expect(restored.position, originalPos);
+
+      container.dispose();
+    });
+
+    test('position persists through size update', () {
+      final container = ProviderContainer();
+      final notifier = container.read(floatingImagesProvider.notifier);
+
+      notifier.addImage(FloatingImage(
+        id: 'img-1',
+        rawBytes: testPngBytes,
+        name: 'a.png',
+      ));
+
+      final originalPos = container
+          .read(floatingImagesProvider)
+          .first
+          .position;
+
+      notifier.updateSize('img-1', const Size(400, 300));
+
+      final img = container.read(floatingImagesProvider).first;
+      expect(img.size, const Size(400, 300));
+      expect(img.position, originalPos);
+
+      container.dispose();
+    });
+
+    testWidgets('rendered widget uses Positioned at image coordinates',
+        (tester) async {
+      final container = ProviderContainer();
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: FloatingImageOverlay(
+              child: const Scaffold(
+                body: SizedBox(width: 800, height: 600),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final notifier = container.read(floatingImagesProvider.notifier);
+      notifier.addImage(FloatingImage(
+        id: 'img-1',
+        rawBytes: testPngBytes,
+        name: 'pos.png',
+      ));
+      const targetPos = Offset(123, 456);
+      notifier.updatePosition('img-1', targetPos);
+
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      final positioned = tester.widget<Positioned>(
+        find.descendant(
+          of: find.byType(FloatingImageWidget),
+          matching: find.byType(Positioned),
+        ),
+      );
+
+      expect(positioned.left, targetPos.dx);
+      expect(positioned.top, targetPos.dy);
+
+      container.dispose();
+    });
+
+    testWidgets('drag updates position in provider', (tester) async {
+      final container = ProviderContainer();
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: FloatingImageOverlay(
+              child: const Scaffold(
+                body: SizedBox(width: 800, height: 600),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final notifier = container.read(floatingImagesProvider.notifier);
+      notifier.addImage(FloatingImage(
+        id: 'img-1',
+        rawBytes: testPngBytes,
+        name: 'drag.png',
+      ));
+
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      final posBefore = container
+          .read(floatingImagesProvider)
+          .first
+          .position;
+
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(FloatingImageWidget)));
+      for (int i = 0; i < 10; i++) {
+        await gesture.moveBy(const Offset(10, 5));
+        await tester.pump();
+      }
+      await gesture.up();
+      await tester.pump();
+
+      final posAfter = container
+          .read(floatingImagesProvider)
+          .first
+          .position;
+
+      expect(posAfter.dx - posBefore.dx, closeTo(100, 1));
+      expect(posAfter.dy - posBefore.dy, closeTo(50, 1));
+
+      container.dispose();
+    });
+  });
 }
 
 Uint8List _createMinimalPng() {
