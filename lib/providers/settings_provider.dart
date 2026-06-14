@@ -35,8 +35,8 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   static const _keyboardModeKey = 'keyboardBarMode';
   static const _themeModeKey = 'themeMode';
 
-  SettingsNotifier() : super(const AppSettings()) {
-    _load();
+  SettingsNotifier({bool loadFromStorage = true}) : super(const AppSettings()) {
+    if (loadFromStorage) _load();
   }
 
   Future<void> _load() async {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import 'package:xterm/xterm.dart';
@@ -42,6 +43,11 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
   final Ref _ref;
 
   SessionListNotifier(this._ref) : super([]);
+
+  @visibleForTesting
+  void debugAddSession(SessionState session) {
+    state = [...state, session];
+  }
 
   Future<void> openSession(Host host, SshConnectionConfig config) async {
     final service = SshService();
