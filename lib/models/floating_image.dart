@@ -10,6 +10,7 @@ class FloatingImage {
   bool minimized;
   final int? requestedWidth;
   final int? requestedHeight;
+  double scale;
 
   FloatingImage({
     required this.id,
@@ -20,5 +21,6 @@ class FloatingImage {
     this.minimized = false,
     this.requestedWidth,
     this.requestedHeight,
+    this.scale = 1.0,
   });
 }

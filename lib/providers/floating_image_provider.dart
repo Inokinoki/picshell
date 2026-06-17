@@ -39,6 +39,7 @@ class FloatingImagesNotifier extends StateNotifier<List<FloatingImage>> {
             minimized: !img.minimized,
             requestedWidth: img.requestedWidth,
             requestedHeight: img.requestedHeight,
+            scale: img.scale,
           )
         else
           img,
@@ -58,6 +59,7 @@ class FloatingImagesNotifier extends StateNotifier<List<FloatingImage>> {
             minimized: img.minimized,
             requestedWidth: img.requestedWidth,
             requestedHeight: img.requestedHeight,
+            scale: img.scale,
           )
         else
           img,
@@ -77,6 +79,29 @@ class FloatingImagesNotifier extends StateNotifier<List<FloatingImage>> {
             minimized: img.minimized,
             requestedWidth: img.requestedWidth,
             requestedHeight: img.requestedHeight,
+            scale: img.scale,
+          )
+        else
+          img,
+    ];
+  }
+
+  /// Updates the user zoom scale, clamped to [0.25, 4.0] (25%–400%).
+  void updateScale(String id, double newScale) {
+    final clamped = newScale.clamp(0.25, 4.0).toDouble();
+    state = [
+      for (final img in state)
+        if (img.id == id)
+          FloatingImage(
+            id: img.id,
+            rawBytes: img.rawBytes,
+            name: img.name,
+            position: img.position,
+            size: img.size,
+            minimized: img.minimized,
+            requestedWidth: img.requestedWidth,
+            requestedHeight: img.requestedHeight,
+            scale: clamped,
           )
         else
           img,
