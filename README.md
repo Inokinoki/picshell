@@ -92,4 +92,4 @@ When a remote command outputs an [iTerm2 inline image](https://iterm2.com/docume
 
 ## License
 
-Private -- not published to pub.dev.
+[MIT](LICENSE)
