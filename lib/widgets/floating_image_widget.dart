@@ -237,54 +237,58 @@ class _FloatingImageWidgetState extends ConsumerState<FloatingImageWidget> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade800,
-                    borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(8),
+                SizedBox(
+                  width: renderSize.width,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade800,
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(8),
+                      ),
                     ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.image, size: 14, color: Colors.grey.shade400),
-                      const SizedBox(width: 4),
-                      Text(
-                        img.name,
-                        style: TextStyle(
-                          color: Colors.grey.shade300,
-                          fontSize: 12,
+                    child: Row(
+                      children: [
+                        Icon(Icons.image, size: 14, color: Colors.grey.shade400),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            img.name,
+                            style: TextStyle(
+                              color: Colors.grey.shade300,
+                              fontSize: 12,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: () {
-                          ref
-                              .read(floatingImagesProvider.notifier)
-                              .toggleMinimize(img.id);
-                        },
-                        child: Icon(
-                          Icons.minimize,
-                          size: 14,
-                          color: Colors.grey.shade400,
+                        GestureDetector(
+                          onTap: () {
+                            ref
+                                .read(floatingImagesProvider.notifier)
+                                .toggleMinimize(img.id);
+                          },
+                          child: Icon(
+                            Icons.minimize,
+                            size: 14,
+                            color: Colors.grey.shade400,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 4),
-                      GestureDetector(
-                        onTap: () {
-                          ref
-                              .read(floatingImagesProvider.notifier)
-                              .removeImage(img.id);
-                        },
-                        child: Icon(
-                          Icons.close,
-                          size: 14,
-                          color: Colors.grey.shade400,
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () {
+                            ref
+                                .read(floatingImagesProvider.notifier)
+                                .removeImage(img.id);
+                          },
+                          child: Icon(
+                            Icons.close,
+                            size: 14,
+                            color: Colors.grey.shade400,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
                 if (_isLoading)
