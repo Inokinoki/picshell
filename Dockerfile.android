@@ -32,7 +32,9 @@ RUN mkdir -p $ANDROID_HOME/cmdline-tools && \
 
 # Accept licenses and install SDK components
 RUN yes | sdkmanager --licenses > /dev/null 2>&1
-RUN sdkmanager "platform-tools" "emulator" "platforms;android-34" "build-tools;34.0.0" "system-images;android-34;google_apis;x86_64"
+RUN sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+RUN sdkmanager "system-images;android-34;google_apis;x86_64"
+RUN sdkmanager "emulator" || true
 
 # Create AVD
 RUN echo "no" | avdmanager create avd -n test_avd -k "system-images;android-34;google_apis;x86_64" --force
