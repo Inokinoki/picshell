@@ -1,0 +1,58 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ANDROID_HOME=/opt/android-sdk
+ENV ANDROID_SDK_ROOT=/opt/android-sdk
+ENV FLUTTER_HOME=/opt/flutter
+ENV PATH=$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$FLUTTER_HOME/bin
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-17-jdk \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libgtk-3-dev \
+    liblzma-dev \
+    libstdc++-12-dev \
+    libpulse0 \
+    xz-utils \
+    git \
+    curl \
+    unzip \
+    wget \
+    xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Android cmdline tools
+RUN mkdir -p $ANDROID_HOME/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdtools.zip && \
+    unzip -q /tmp/cmdtools.zip -d $ANDROID_HOME/cmdline-tools && \
+    mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest && \
+    rm /tmp/cmdtools.zip
+
+# Accept licenses and install SDK components
+RUN yes | sdkmanager --licenses > /dev/null 2>&1
+RUN sdkmanager "platform-tools" "emulator" "platforms;android-34" "build-tools;34.0.0" "system-images;android-34;google_apis;x86_64"
+
+# Create AVD
+RUN echo "no" | avdmanager create avd -n test_avd -k "system-images;android-34;google_apis;x86_64" --force
+
+# Install Flutter
+RUN git clone https://github.com/flutter/flutter.git -b stable $FLUTTER_HOME
+
+WORKDIR /app
+COPY . .
+
+RUN flutter pub get
+RUN flutter precache
+
+# Run Android integration tests
+CMD ["bash", "-c", "\
+    echo 'Starting Android emulator...' && \
+    emulator -avd test_avd -no-window -no-audio -no-snapshot -gpu swiftshader_indirect & \
+    echo 'Waiting for emulator to boot...' && \
+    adb wait-for-device && \
+    adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done' && \
+    echo 'Emulator booted!' && \
+    flutter test integration_test/ -d emulator-5554 \
+"]
