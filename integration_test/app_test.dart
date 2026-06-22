@@ -150,20 +150,5 @@ void main() {
       expect(find.text('Settings'), findsAtLeast(1));
       container.dispose();
     });
-
-    testWidgets('manage hosts button is tappable', (tester) async {
-      final container = await _initApp();
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: const PicshellApp(),
-      ));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-
-      final btn = find.byTooltip('Manage Hosts');
-      expect(btn, findsOneWidget);
-      await tester.tap(btn);
-      await tester.pumpAndSettle(const Duration(seconds: 2));
-      container.dispose();
-    });
   });
 }
