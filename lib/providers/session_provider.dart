@@ -132,6 +132,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
   final Map<String, int> _reconnectAttempts = {};
 
   void _scheduleReconnect(String sessionId) {
+    if (!mounted) return;
     final session = state.where((s) => s.id == sessionId).firstOrNull;
     if (session == null || session.config == null) return;
 
@@ -157,6 +158,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
 
     _reconnectTimers[sessionId]?.cancel();
     _reconnectTimers[sessionId] = Timer(delay, () async {
+      if (!mounted) return;
       final current = state.where((s) => s.id == sessionId).firstOrNull;
       if (current == null || current.config == null) return;
 
@@ -194,7 +196,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
               s,
         ];
       } catch (_) {
-        _scheduleReconnect(sessionId);
+        if (mounted) _scheduleReconnect(sessionId);
       }
     });
   }

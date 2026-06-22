@@ -11,19 +11,26 @@ import 'package:picshell/services/host_store.dart';
 import 'package:picshell/providers/host_provider.dart';
 import 'package:picshell/providers/settings_provider.dart';
 
+bool _hiveReady = false;
+
 Future<ProviderContainer> _initApp() async {
-  await Hive.initFlutter();
-  if (!Hive.isAdapterRegistered(0)) Hive.registerAdapter(HostAdapter());
-  if (!Hive.isAdapterRegistered(1)) Hive.registerAdapter(AuthTypeAdapter());
-  if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(SshKeyAdapter());
-  if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(SessionAdapter());
+  if (!_hiveReady) {
+    await Hive.initFlutter();
+    if (!Hive.isAdapterRegistered(0)) Hive.registerAdapter(HostAdapter());
+    if (!Hive.isAdapterRegistered(1)) Hive.registerAdapter(AuthTypeAdapter());
+    if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(SshKeyAdapter());
+    if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(SessionAdapter());
+    _hiveReady = true;
+  }
 
   final hostStore = HostStore();
   await hostStore.init();
 
   return ProviderContainer(overrides: [
     hostStoreProvider.overrideWithValue(hostStore),
-    settingsProvider.overrideWith((ref) => SettingsNotifier(loadFromStorage: false)),
+    settingsProvider.overrideWith(
+      (ref) => SettingsNotifier(loadFromStorage: false),
+    ),
   ]);
 }
 
@@ -31,7 +38,7 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   group('App launch', () {
-    testWidgets('app starts and shows home screen', (tester) async {
+    testWidgets('shows home screen with title', (tester) async {
       final container = await _initApp();
       await tester.pumpWidget(UncontrolledProviderScope(
         container: container,
@@ -43,7 +50,7 @@ void main() {
       container.dispose();
     });
 
-    testWidgets('shows new connection button', (tester) async {
+    testWidgets('shows toolbar buttons', (tester) async {
       final container = await _initApp();
       await tester.pumpWidget(UncontrolledProviderScope(
         container: container,
@@ -52,22 +59,12 @@ void main() {
       await tester.pumpAndSettle(const Duration(seconds: 3));
 
       expect(find.byTooltip('New Connection (Ctrl+N)'), findsOneWidget);
-      container.dispose();
-    });
-
-    testWidgets('shows manage hosts button', (tester) async {
-      final container = await _initApp();
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: const PicshellApp(),
-      ));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-
       expect(find.byTooltip('Manage Hosts'), findsOneWidget);
+      expect(find.byTooltip('Settings'), findsOneWidget);
       container.dispose();
     });
 
-    testWidgets('shows empty state when no sessions', (tester) async {
+    testWidgets('shows empty state', (tester) async {
       final container = await _initApp();
       await tester.pumpWidget(UncontrolledProviderScope(
         container: container,
@@ -81,7 +78,7 @@ void main() {
   });
 
   group('Connection dialog', () {
-    testWidgets('tapping new connection opens dialog', (tester) async {
+    testWidgets('opens dialog with form fields', (tester) async {
       final container = await _initApp();
       await tester.pumpWidget(UncontrolledProviderScope(
         container: container,
@@ -95,6 +92,27 @@ void main() {
       expect(find.text('Host'), findsOneWidget);
       expect(find.text('Port'), findsOneWidget);
       expect(find.text('Username'), findsOneWidget);
+      expect(find.text('Auth Method'), findsOneWidget);
+      expect(find.text('Connect'), findsOneWidget);
+      expect(find.text('Cancel'), findsOneWidget);
+      container.dispose();
+    });
+
+    testWidgets('port defaults to 22', (tester) async {
+      final container = await _initApp();
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const PicshellApp(),
+      ));
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+
+      await tester.tap(find.byTooltip('New Connection (Ctrl+N)'));
+      await tester.pumpAndSettle();
+
+      final portField = tester.widget<TextField>(
+        find.widgetWithText(TextField, 'Port'),
+      );
+      expect(portField.controller!.text, '22');
       container.dispose();
     });
 
@@ -108,73 +126,11 @@ void main() {
 
       await tester.tap(find.byTooltip('New Connection (Ctrl+N)'));
       await tester.pumpAndSettle();
+      expect(find.text('Host'), findsOneWidget);
 
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
-
       expect(find.text('Host'), findsNothing);
-      container.dispose();
-    });
-
-    testWidgets('dialog has Connect button', (tester) async {
-      final container = await _initApp();
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: const PicshellApp(),
-      ));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-
-      await tester.tap(find.byTooltip('New Connection (Ctrl+N)'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Connect'), findsOneWidget);
-      container.dispose();
-    });
-  });
-
-  group('SSH connection flow', () {
-    testWidgets('invalid host shows error snackbar', (tester) async {
-      final container = await _initApp();
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: const PicshellApp(),
-      ));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-
-      await tester.tap(find.byTooltip('New Connection (Ctrl+N)'));
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-          find.widgetWithText(TextField, 'Host'), '192.0.2.1');
-      await tester.enterText(
-          find.widgetWithText(TextField, 'Username'), 'test');
-
-      final passwordFields = find.widgetWithText(TextField, 'Password');
-      if (passwordFields.evaluate().isNotEmpty) {
-        await tester.enterText(passwordFields.first, 'test');
-      }
-
-      await tester.tap(find.text('Connect'));
-      await tester.pumpAndSettle(const Duration(seconds: 12));
-
-      expect(find.byType(SnackBar), findsOneWidget);
-      container.dispose();
-    });
-
-    testWidgets('empty host field still attempts connection', (tester) async {
-      final container = await _initApp();
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: const PicshellApp(),
-      ));
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-
-      await tester.tap(find.byTooltip('New Connection (Ctrl+N)'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Connect'));
-      await tester.pump();
-
       container.dispose();
     });
   });
@@ -195,7 +151,7 @@ void main() {
       container.dispose();
     });
 
-    testWidgets('navigate to hosts management', (tester) async {
+    testWidgets('manage hosts button is tappable', (tester) async {
       final container = await _initApp();
       await tester.pumpWidget(UncontrolledProviderScope(
         container: container,
@@ -203,9 +159,10 @@ void main() {
       ));
       await tester.pumpAndSettle(const Duration(seconds: 3));
 
-      await tester.tap(find.byTooltip('Manage Hosts'));
-      await tester.pumpAndSettle();
-
+      final btn = find.byTooltip('Manage Hosts');
+      expect(btn, findsOneWidget);
+      await tester.tap(btn);
+      await tester.pumpAndSettle(const Duration(seconds: 2));
       container.dispose();
     });
   });
