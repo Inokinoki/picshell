@@ -9,17 +9,21 @@ import 'package:picshell/models/ssh_key.dart';
 import 'package:picshell/models/session.dart';
 import 'package:picshell/services/host_store.dart';
 import 'package:picshell/providers/host_provider.dart';
+import 'package:picshell/providers/settings_provider.dart';
 
 Future<ProviderContainer> _initApp() async {
   await Hive.initFlutter();
   if (!Hive.isAdapterRegistered(0)) Hive.registerAdapter(HostAdapter());
   if (!Hive.isAdapterRegistered(1)) Hive.registerAdapter(AuthTypeAdapter());
+  if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(SshKeyAdapter());
+  if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(SessionAdapter());
 
   final hostStore = HostStore();
   await hostStore.init();
 
   return ProviderContainer(overrides: [
     hostStoreProvider.overrideWithValue(hostStore),
+    settingsProvider.overrideWith((ref) => SettingsNotifier(loadFromStorage: false)),
   ]);
 }
 
