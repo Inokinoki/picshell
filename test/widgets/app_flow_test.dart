@@ -53,6 +53,12 @@ class _FakeHostStore implements HostStore {
 
   @override
   Future<void> deleteSession(String id) async {}
+
+  @override
+  bool get isEncrypting => false;
+
+  @override
+  void setPassphrase(String passphrase) {}
 }
 
 Widget _buildApp(ProviderContainer container) {
