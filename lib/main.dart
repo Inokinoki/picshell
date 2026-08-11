@@ -17,7 +17,9 @@ void main() async {
   Hive.registerAdapter(SshKeyAdapter());
   Hive.registerAdapter(SessionAdapter());
 
-  // Initialise global modifier-key tracking (Cmd/Ctrl + scroll → zoom).
+  // Initialise global modifier-key tracking (Option/Alt + scroll → zoom;
+  // Cmd+scroll is swallowed by macOS for Mission Control / Spaces).
+  ModifierTracker.enableDebugLogging = kDebugMode;
   ModifierTracker.instance.init();
 
   final hostStore = HostStore();

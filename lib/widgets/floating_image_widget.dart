@@ -18,6 +18,11 @@ class ModifierTracker {
   ModifierTracker._();
   static final ModifierTracker instance = ModifierTracker._();
 
+  /// Toggle verbose logging of modifier-key and scroll-zoom events. Off by
+  /// default so release builds stay quiet; flip to true (e.g. in `main.dart`
+  /// during local debugging) to inspect the zoom pipeline in the console.
+  static bool enableDebugLogging = false;
+
   bool _altHeld = false;
 
   bool get isZoomModifierHeld => _altHeld;
@@ -37,13 +42,17 @@ class ModifierTracker {
       if (event.logicalKey == LogicalKeyboardKey.altLeft ||
           event.logicalKey == LogicalKeyboardKey.altRight) {
         _altHeld = true;
-        debugPrint('[ModifierTracker] alt DOWN → held=$_altHeld');
+        if (enableDebugLogging) {
+          debugPrint('[ModifierTracker] alt DOWN → held=$_altHeld');
+        }
       }
     } else if (event is KeyUpEvent) {
       if (event.logicalKey == LogicalKeyboardKey.altLeft ||
           event.logicalKey == LogicalKeyboardKey.altRight) {
         _altHeld = false;
-        debugPrint('[ModifierTracker] alt UP → held=$_altHeld');
+        if (enableDebugLogging) {
+          debugPrint('[ModifierTracker] alt UP → held=$_altHeld');
+        }
       }
     }
     return false; // don't consume – let others handle too.
@@ -203,9 +212,11 @@ class _FloatingImageWidgetState extends ConsumerState<FloatingImageWidget> {
             final mod = tracker.isZoomModifierHeld ||
                 pressed.contains(LogicalKeyboardKey.altLeft) ||
                 pressed.contains(LogicalKeyboardKey.altRight);
-            debugPrint('[FloatingImage] scroll dy=${signal.scrollDelta.dy} '
-                'tracker=${tracker.isZoomModifierHeld} '
-                'HK=${pressed}');
+            if (ModifierTracker.enableDebugLogging) {
+              debugPrint('[FloatingImage] scroll dy=${signal.scrollDelta.dy} '
+                  'tracker=${tracker.isZoomModifierHeld} '
+                  'HK=${pressed}');
+            }
             if (mod) {
               final factor = signal.scrollDelta.dy < 0 ? 1.1 : (1 / 1.1);
               ref
