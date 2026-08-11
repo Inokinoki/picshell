@@ -1,3 +1,5 @@
+import 'dart:io' show Directory, File;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -15,10 +17,20 @@ import 'package:picshell/providers/session_provider.dart';
 import 'package:picshell/providers/settings_provider.dart';
 import 'package:picshell/services/host_store.dart';
 import 'package:picshell/services/known_hosts_store.dart';
+import 'package:picshell/services/sftp_service.dart';
 import 'package:picshell/services/ssh_service.dart';
 import 'package:picshell/widgets/floating_image_widget.dart';
 
 bool _hiveReady = false;
+
+/// Connection target for the throwaway docker sshd. Defaults to localhost for
+/// local runs; CI injects 10.0.2.2 (the Android emulator's alias for the host
+/// loopback) so the emulator can reach the sshd container published on the
+/// runner host. Port defaults to 2222 (Dockerfile.sshd).
+const _sshHost = String.fromEnvironment('TEST_SSH_HOST', defaultValue: '127.0.0.1');
+const _sshPort = int.fromEnvironment('TEST_SSH_PORT', defaultValue: 2222);
+const _sshUser = String.fromEnvironment('TEST_SSH_USER', defaultValue: 'root');
+const _sshPass = String.fromEnvironment('TEST_SSH_PASS', defaultValue: 'testpass');
 
 Future<ProviderContainer> _initApp() async {
   if (!_hiveReady) {
@@ -92,18 +104,18 @@ void main() {
       final host = Host(
         id: 'test-sshd',
         name: 'docker-sshd',
-        hostname: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        hostname: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authType: AuthType.password,
-        password: 'testpass',
+        password: _sshPass,
       );
       final config = SshConnectionConfig(
-        host: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        host: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authMethod: SshAuthMethod.password,
-        password: 'testpass',
+        password: _sshPass,
       );
 
       await container
@@ -142,18 +154,18 @@ void main() {
       final host = Host(
         id: 'test-sshd',
         name: 'docker-sshd',
-        hostname: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        hostname: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authType: AuthType.password,
-        password: 'testpass',
+        password: _sshPass,
       );
       final config = SshConnectionConfig(
-        host: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        host: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authMethod: SshAuthMethod.password,
-        password: 'testpass',
+        password: _sshPass,
       );
       await container
           .read(sessionListProvider.notifier)
@@ -220,18 +232,18 @@ void main() {
       final host = Host(
         id: 'test-sshd',
         name: 'docker-sshd',
-        hostname: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        hostname: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authType: AuthType.password,
-        password: 'testpass',
+        password: _sshPass,
       );
       final config = SshConnectionConfig(
-        host: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        host: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authMethod: SshAuthMethod.password,
-        password: 'testpass',
+        password: _sshPass,
       );
       await container
           .read(sessionListProvider.notifier)
@@ -294,6 +306,87 @@ void main() {
       expect(scaleAfter, greaterThan(scaleBefore),
           reason: 'Alt+wheel up should zoom in');
 
+      container.dispose();
+    }, timeout: const Timeout(Duration(minutes: 2)));
+  });
+
+  group('SFTP', () {
+    // Opens a session and returns the connected SftpService built on it.
+    // Shared by the list/download smoke tests so each doesn't re-handshake.
+    Future<SftpService> _connectSession(
+      WidgetTester tester,
+      ProviderContainer container,
+    ) async {
+      final host = Host(
+        id: 'test-sshd',
+        name: 'docker-sshd',
+        hostname: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
+        authType: AuthType.password,
+        password: _sshPass,
+      );
+      final config = SshConnectionConfig(
+        host: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
+        authMethod: SshAuthMethod.password,
+        password: _sshPass,
+      );
+      await container.read(sessionListProvider.notifier).openSession(host, config);
+
+      // Poll until connected (handshake + auth takes a few seconds).
+      for (int i = 0; i < 60; i++) {
+        await tester.pump(const Duration(seconds: 1));
+        final sessions = container.read(sessionListProvider);
+        if (sessions.isNotEmpty && sessions.first.connected) break;
+      }
+      final sessions = container.read(sessionListProvider);
+      expect(sessions.isNotEmpty && sessions.first.connected, isTrue,
+          reason: 'SFTP smoke needs a connected session');
+      return SftpService(sessions.first.sshService);
+    }
+
+    testWidgets('listdir / returns the marker file', (tester) async {
+      final container = await _initApp();
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const PicshellApp(),
+      ));
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+
+      final sftp = await _connectSession(tester, container);
+      final entries = await sftp.listdir('/');
+
+      expect(entries, isNotEmpty, reason: 'root listing should not be empty');
+      expect(
+        entries.any((e) => e.name == 'picshell_sftp_marker.txt'),
+        isTrue,
+        reason: 'marker file from Dockerfile.sshd should be listed',
+      );
+
+      await sftp.close();
+      container.dispose();
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    testWidgets('download retrieves the marker file content', (tester) async {
+      final container = await _initApp();
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const PicshellApp(),
+      ));
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+
+      final sftp = await _connectSession(tester, container);
+      final tmp = await Directory.systemTemp.createTemp('picshell_sftp_');
+      final localPath = '${tmp.path}/marker.txt';
+      await sftp.download('/picshell_sftp_marker.txt', localPath);
+
+      final content = await File(localPath).readAsString();
+      expect(content.trim(), 'picshell-sftp-smoke');
+
+      await sftp.close();
+      await tmp.delete(recursive: true);
       container.dispose();
     }, timeout: const Timeout(Duration(minutes: 2)));
   });
