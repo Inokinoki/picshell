@@ -1,11 +1,10 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:file_picker/file_picker.dart';
 import '../models/host.dart';
 import '../models/ssh_key.dart';
 import '../providers/host_provider.dart';
 import '../providers/key_provider.dart';
+import '../services/key_import_service.dart';
 import '../services/ssh_service.dart';
 
 class ConnectionDialog extends ConsumerStatefulWidget {
@@ -57,9 +56,23 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
                       _hostController.text = host.hostname;
                       _portController.text = host.port.toString();
                       _userController.text = host.username;
-                      if (host.authType == AuthType.key) {
-                        _authType = 'key';
+                      _passwordController.text = host.password ?? '';
+                      switch (host.authType) {
+                        case AuthType.key:
+                          _authType = 'key';
+                          break;
+                        case AuthType.agent:
+                          _authType = 'agent';
+                          break;
+                        case AuthType.password:
+                          _authType = 'password';
+                          break;
                       }
+                      _selectedKey = host.keyId == null
+                          ? null
+                          : (keys.any((k) => k.id == host.keyId)
+                              ? keys.firstWhere((k) => k.id == host.keyId)
+                              : null);
                     }
                   });
                 },
@@ -138,29 +151,22 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
   }
 
   Future<void> _importKey() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.any,
-      allowMultiple: false,
-    );
-
-    if (result != null && result.files.isNotEmpty) {
-      final file = result.files.first;
-      final path = file.path;
-      if (path != null) {
-        final content = await File(path).readAsString();
-        final key = SshKey(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          name: file.name,
-          privateKeyPem: content,
-          publicKey: '',
-        );
-        await ref.read(keyListProvider.notifier).add(key);
-        setState(() => _selectedKey = key);
-      }
+    final key = await KeyImportService.importFromFile();
+    if (key != null) {
+      await ref.read(keyListProvider.notifier).add(key);
+      setState(() => _selectedKey = key);
     }
   }
 
   void _connect() {
+    final authType = _authType == 'key'
+        ? AuthType.key
+        : _authType == 'agent'
+            ? AuthType.agent
+            : AuthType.password;
+    final password =
+        _authType == 'password' ? _passwordController.text : null;
+
     final host =
         _selectedSavedHost ??
         Host(
@@ -169,12 +175,9 @@ class _ConnectionDialogState extends ConsumerState<ConnectionDialog> {
           hostname: _hostController.text,
           port: int.tryParse(_portController.text) ?? 22,
           username: _userController.text,
-          authType: _authType == 'key'
-              ? AuthType.key
-              : _authType == 'agent'
-              ? AuthType.key
-              : AuthType.password,
+          authType: authType,
           keyId: _selectedKey?.id,
+          password: password,
         );
 
     SshAuthMethod authMethod;
