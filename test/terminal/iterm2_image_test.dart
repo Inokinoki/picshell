@@ -18,7 +18,7 @@ void main() {
       final oscData = 'File=inline=1;size=${pngBytes.length}:$base64Data';
 
       final received = <Map<String, dynamic>>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
         received.add({'bytes': bytes, 'name': name, 'w': w, 'h': h});
       };
 
@@ -42,7 +42,7 @@ void main() {
       final oscData = 'File=inline=1:$base64Data';
 
       final received = <String>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
         received.add(name);
       };
 
@@ -58,7 +58,7 @@ void main() {
       final oscData = 'File=inline=1;width=200px;height=100px:${base64Data}';
 
       final received = <Map<String, dynamic>>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
         received.add({'w': w, 'h': h});
       };
 
@@ -71,7 +71,7 @@ void main() {
 
     test('should ignore non-1337 OSC sequences', () {
       var called = false;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
         called = true;
       };
 
@@ -86,7 +86,7 @@ void main() {
       final base64Data = base64.encode(pngBytes);
 
       Uint8List? receivedBytes;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
         receivedBytes = bytes;
       };
 
@@ -99,7 +99,7 @@ void main() {
 
     test('should not fire callback for invalid base64', () {
       var called = false;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
         called = true;
       };
 
@@ -110,7 +110,7 @@ void main() {
 
     test('should not fire callback for missing File= prefix', () {
       var called = false;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? h, int? w) {
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? h, int? w, {inline = true, preserveAspectRatio = true}) {
         called = true;
       };
 
@@ -131,7 +131,7 @@ void main() {
 
     test('should handle empty payload after colon', () {
       Uint8List? receivedBytes;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
         receivedBytes = bytes;
       };
 
@@ -146,7 +146,7 @@ void main() {
       final base64Data = base64.encode(pngBytes);
 
       String? receivedName;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h) {
+      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
         receivedName = name;
       };
 

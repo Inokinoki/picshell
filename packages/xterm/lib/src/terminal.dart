@@ -1,4 +1,4 @@
-import 'dart:convert' show base64;
+import 'dart:convert' show base64, utf8;
 import 'dart:math' show max;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -140,9 +140,18 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   var _precedingCodepoint = 0;
 
   /// Callback when an iTerm2 image is decoded.
-  /// Receives raw image bytes, filename, and optional width/height from protocol.
-  void Function(Uint8List bytes, String name, int? width, int? height)?
-      onImageDecoded;
+  /// Receives raw image bytes, filename, and optional width/height from
+  /// protocol. [inline] is true when the image should display inline (iTerm2
+  /// default is download). [preserveAspectRatio] is true when the image's
+  /// aspect ratio should be kept during sizing.
+  void Function(
+    Uint8List bytes,
+    String name,
+    int? width,
+    int? height, {
+    bool inline,
+    bool preserveAspectRatio,
+  })? onImageDecoded;
 
   /* TerminalState */
 
@@ -935,42 +944,117 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   @override
   void unknownOSC(String ps, List<String> pt) {
     if (ps == '1337' && pt.isNotEmpty) {
-      print('[iTerm2] OSC 1337 received, parts=${pt.length}, firstPart=${pt.first.length} chars');
-      _handleIterm2File(pt.join(';'));
+      final first = pt.first;
+      if (first.startsWith('File=')) {
+        _handleIterm2File(pt);
+      } else if (first.startsWith('MultipartFile=')) {
+        _handleMultipartFile(pt);
+      } else if (first.startsWith('FilePart=')) {
+        _handleFilePart(pt);
+      } else if (first == 'FileEnd') {
+        _handleFileEnd();
+      }
     } else {
       onPrivateOSC?.call(ps, pt);
     }
   }
 
-  void _handleIterm2File(String data) {
-    if (!data.startsWith('File=')) {
-      print('[iTerm2] rejected: no File= prefix, got: ${data.substring(0, data.length > 30 ? 30 : data.length)}');
-      return;
+  /// Single-sequence iTerm2 image: `File=params:base64`. The params and the
+  /// base64 payload are separated by the first `:`; everything after that
+  /// colon (across all `pt` parts, rejoined by `;` since base64 contains no
+  /// semicolons but the parser split on them) is the payload.
+  void _handleIterm2File(List<String> pt) {
+    final data = pt.join(';').substring('File='.length);
+    final colonIndex = data.indexOf(':');
+    if (colonIndex == -1) return;
+
+    final params = _parseIterm2Params(data.substring(0, colonIndex));
+    if (params == null) return;
+    final base64Data = data.substring(colonIndex + 1);
+
+    _decodeAndEmit(base64Data, params);
+  }
+
+  // ---- iTerm2 3.5+ multipart transfer state -------------------------------
+  // MultipartFile=params announces a transfer; subsequent FilePart=base64
+  // chunks append data; FileEnd closes and emits the assembled image.
+  _MultipartState? _multipart;
+
+  void _handleMultipartFile(List<String> pt) {
+    // MultipartFile=params — params use the same key=value;key=value syntax.
+    final paramsStr = pt.join(';').substring('MultipartFile='.length);
+    final params = _parseIterm2Params(paramsStr) ?? <String, String>{};
+    _multipart = _MultipartState(params: params, buffer: StringBuffer());
+  }
+
+  void _handleFilePart(List<String> pt) {
+    final m = _multipart;
+    if (m == null) return;
+    // FilePart=base64 — rejoin by ';' in case the payload contained a ';' that
+    // got split (base64 itself has none, so this is just defensive).
+    final chunk = pt.join(';').substring('FilePart='.length);
+    m.buffer.write(chunk);
+  }
+
+  void _handleFileEnd() {
+    final m = _multipart;
+    _multipart = null;
+    if (m == null) return;
+    _decodeAndEmit(m.buffer.toString(), m.params);
+  }
+
+  /// Decodes base64 image data and fires [onImageDecoded] with normalised
+  /// parameters. Pure params → callback translation; no terminal state.
+  void _decodeAndEmit(String base64Data, Map<String, String> params) {
+    try {
+      final bytes = base64.decode(base64Data);
+      // name is base64-encoded per spec; fall back to raw if decode fails.
+      final nameRaw = params['name'];
+      final name = nameRaw == null
+          ? '__default__'
+          : (tryDecodeBase64Str(nameRaw) ?? nameRaw);
+      final inline = params['inline'] == '1';
+      final preserveAspectRatio = params['preserveAspectRatio'] != '0';
+      final widthVal = _parseDimension(params['width']);
+      final heightVal = _parseDimension(params['height']);
+
+      if (onImageDecoded != null) {
+        onImageDecoded!(
+          bytes,
+          name,
+          widthVal,
+          heightVal,
+          inline: inline,
+          preserveAspectRatio: preserveAspectRatio,
+        );
+      }
+    } catch (_) {
+      // Malformed payload — silently drop, matching the no-op behaviour of
+      // other unsupported escape sequences.
     }
+  }
 
-    final afterPrefix = data.substring('File='.length);
-    final colonIndex = afterPrefix.indexOf(':');
-    if (colonIndex == -1) {
-      print('[iTerm2] rejected: no colon found');
-      return;
+  /// Parses an iTerm2 dimension param into a numeric pixel value when possible.
+  /// The iTerm2 protocol allows `N` (cells), `Npx` (pixels), `N%` (percent),
+  /// or `auto`. We expose the numeric portion and let the widget decide units
+  /// based on whether the original string carried a suffix; here we return the
+  /// integer and lose the unit (callers treat large values as pixels).
+  /// Percent values are kept negative-encoded (`-N`) so the widget can detect
+  /// them: a width of `50%` becomes `-50`.
+  static int? _parseDimension(String? s) {
+    if (s == null || s == 'auto') return null;
+    final num = int.tryParse(s.replaceAll(RegExp(r'[^0-9]'), ''));
+    if (num == null) return null;
+    if (s.endsWith('%')) return -num; // negative signals "percent"
+    return num;
+  }
+
+  static String? tryDecodeBase64Str(String s) {
+    try {
+      return utf8.decode(base64.decode(s));
+    } catch (_) {
+      return null;
     }
-
-    final paramsStr = afterPrefix.substring(0, colonIndex);
-    final base64Data = afterPrefix.substring(colonIndex + 1);
-
-    final params = _parseIterm2Params(paramsStr);
-    if (params == null) {
-      print('[iTerm2] rejected: params parse returned null for "$paramsStr"');
-      return;
-    }
-
-    final name = params['name'] ?? '__default__';
-    final widthStr = params['width'];
-    final heightStr = params['height'];
-    final cursorRow = buffer.cursorY;
-
-    print('[iTerm2] decoding: name=$name, base64Len=${base64Data.length}, params=$params');
-    _decodeIterm2Image(name, base64Data, widthStr, heightStr, cursorRow);
   }
 
   Map<String, String>? _parseIterm2Params(String s) {
@@ -982,33 +1066,11 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     }
     return result.isEmpty ? null : result;
   }
+}
 
-  Future<void> _decodeIterm2Image(
-    String name,
-    String base64Combined,
-    String? widthStr,
-    String? heightStr,
-    int cursorRow,
-  ) async {
-    try {
-      final bytes = base64.decode(base64Combined);
-      print('[iTerm2] base64 decoded OK, ${bytes.length} bytes');
-      final widthVal = widthStr != null
-          ? int.tryParse(widthStr.replaceAll(RegExp(r'[^0-9]'), ''))
-          : null;
-      final heightVal = heightStr != null
-          ? int.tryParse(heightStr.replaceAll(RegExp(r'[^0-9]'), ''))
-          : null;
-
-      if (onImageDecoded != null) {
-        print('[iTerm2] firing onImageDecoded callback');
-        onImageDecoded!(bytes, name, widthVal, heightVal);
-      } else {
-        print('[iTerm2] WARNING: onImageDecoded is null!');
-      }
-    } catch (e, stack) {
-      print('[iTerm2] ERROR decoding: $e');
-      print(stack);
-    }
-  }
+/// Accumulator for an in-progress iTerm2 multipart image transfer.
+class _MultipartState {
+  final Map<String, String> params;
+  final StringBuffer buffer;
+  _MultipartState({required this.params, required this.buffer});
 }

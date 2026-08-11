@@ -63,6 +63,10 @@ class ModifierTracker {
 /// `width`/`height` request params when present, falling back to the decoded
 /// pixel dimensions, then fitting to 80% of [viewport]. Pure function for
 /// testability.
+///
+/// Dimension encoding (mirrors the xterm parser): a positive value is treated
+/// as pixels; a **negative** value `-N` means "N percent of the viewport"
+/// (e.g. `-50` → half the viewport). `null` means "no request, use decoded".
 Size computeBaseDisplaySize({
   required int decodedWidth,
   required int decodedHeight,
@@ -70,17 +74,19 @@ Size computeBaseDisplaySize({
   int? requestedHeight,
   required Size viewport,
 }) {
+  // Normalise percent requests (negative-encoded) to pixels first.
+  final w = _resolveDimension(requestedWidth, viewport.width);
+  final h = _resolveDimension(requestedHeight, viewport.height);
+
   Size size;
-  if (requestedWidth != null && requestedHeight != null) {
-    size = Size(requestedWidth.toDouble(), requestedHeight.toDouble());
-  } else if (requestedWidth != null) {
+  if (w != null && h != null) {
+    size = Size(w, h);
+  } else if (w != null) {
     final ratio = decodedHeight / decodedWidth;
-    size =
-        Size(requestedWidth.toDouble(), requestedWidth.toDouble() * ratio);
-  } else if (requestedHeight != null) {
+    size = Size(w, w * ratio);
+  } else if (h != null) {
     final ratio = decodedWidth / decodedHeight;
-    size = Size(
-        requestedHeight.toDouble() * ratio, requestedHeight.toDouble());
+    size = Size(h * ratio, h);
   } else {
     size = Size(decodedWidth.toDouble(), decodedHeight.toDouble());
   }
@@ -94,6 +100,14 @@ Size computeBaseDisplaySize({
     size = Size(size.width * scale, size.height * scale);
   }
   return size;
+}
+
+/// Resolves an iTerm2 dimension request to pixels. `null` → `null` (no
+/// request). Positive `N` → `N` px. Negative `-N` → `N%` of [viewportExtent].
+double? _resolveDimension(int? dim, double viewportExtent) {
+  if (dim == null) return null;
+  if (dim < 0) return viewportExtent * (-dim) / 100.0;
+  return dim.toDouble();
 }
 
 class FloatingImageWidget extends ConsumerStatefulWidget {

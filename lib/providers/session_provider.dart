@@ -62,19 +62,25 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       service.resizeTerminal(width, height);
     };
 
-    terminal.onImageDecoded =
-        (Uint8List bytes, String imgName, int? w, int? h) {
-          print('[Session] onImageDecoded: name=$imgName, ${bytes.length} bytes');
-          final image = FloatingImage(
-            id: _uuid.v4(),
-            rawBytes: bytes,
-            name: imgName,
-            requestedWidth: w,
-            requestedHeight: h,
-          );
-          _ref.read(floatingImagesProvider.notifier).addImage(image);
-          print('[Session] image added to provider, count=${_ref.read(floatingImagesProvider).length}');
-        };
+    terminal.onImageDecoded = (
+      Uint8List bytes,
+      String imgName,
+      int? w,
+      int? h, {
+      inline = true,
+      preserveAspectRatio = true,
+    }) {
+      final image = FloatingImage(
+        id: _uuid.v4(),
+        rawBytes: bytes,
+        name: imgName,
+        requestedWidth: w,
+        requestedHeight: h,
+        inline: inline,
+        preserveAspectRatio: preserveAspectRatio,
+      );
+      _ref.read(floatingImagesProvider.notifier).addImage(image);
+    };
 
     final session = SessionState(
       id: sessionId,

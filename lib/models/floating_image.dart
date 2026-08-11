@@ -11,6 +11,8 @@ class FloatingImage {
   final int? requestedWidth;
   final int? requestedHeight;
   double scale;
+  final bool inline;
+  final bool preserveAspectRatio;
 
   FloatingImage({
     required this.id,
@@ -22,5 +24,7 @@ class FloatingImage {
     this.requestedWidth,
     this.requestedHeight,
     this.scale = 1.0,
+    this.inline = true,
+    this.preserveAspectRatio = true,
   });
 }
