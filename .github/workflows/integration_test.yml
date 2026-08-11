@@ -29,11 +29,31 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # Build and run the throwaway sshd (with SFTP subsystem) that the
+      # integration tests connect to. Publish it on host port 2222; the
+      # Android emulator reaches the host loopback via 10.0.2.2.
+      - name: Start sshd container
+        run: |
+          docker build -f Dockerfile.sshd -t picshell-sshd-test .
+          docker run -d --name sshd -p 2222:2222 picshell-sshd-test
+          # Wait until the port accepts connections.
+          for i in $(seq 1 20); do
+            if nc -z localhost 2222; then echo "sshd up"; break; fi
+            sleep 1
+          done
+
       - name: Run unit tests
         run: flutter test test/
 
       - name: Run Android integration tests
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          # The emulator's 10.0.2.2 resolves to the host loopback, where the
+          # sshd container is published. Credentials match Dockerfile.sshd.
+          TEST_SSH_HOST: 10.0.2.2
+          TEST_SSH_PORT: 2222
+          TEST_SSH_USER: root
+          TEST_SSH_PASS: testpass
         with:
           api-level: 34
           target: google_apis
