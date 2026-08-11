@@ -55,6 +55,11 @@ class HomeScreen extends ConsumerWidget {
                   tooltip: 'Manage Hosts',
                 ),
                 IconButton(
+                  icon: const Icon(Icons.vpn_key),
+                  onPressed: () => context.push('/keys'),
+                  tooltip: 'Manage SSH Keys',
+                ),
+                IconButton(
                   icon: const Icon(Icons.add),
                   onPressed: () => _showConnectDialog(context, ref),
                   tooltip: 'New Connection (Ctrl+N)',
