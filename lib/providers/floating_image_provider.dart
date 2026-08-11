@@ -7,6 +7,15 @@ final floatingImagesProvider =
       (ref) => FloatingImagesNotifier(),
     );
 
+/// Maximum number of non-minimized floating images kept on screen. Older
+/// images are evicted (LRU) once this is exceeded. Minimized images also
+/// count toward [maxTotalBytes] since their bytes still live in memory.
+const maxImages = 8;
+
+/// Soft cap on the total decoded bytes held by the provider. Once exceeded,
+/// the oldest images are dropped until the sum fits.
+const maxTotalBytes = 64 * 1024 * 1024; // 64 MiB
+
 class FloatingImagesNotifier extends StateNotifier<List<FloatingImage>> {
   FloatingImagesNotifier() : super([]);
 
@@ -20,6 +29,31 @@ class FloatingImagesNotifier extends StateNotifier<List<FloatingImage>> {
     );
     image.position = offset;
     state = [...state, image];
+    _enforceLimits();
+  }
+
+  /// Evicts the oldest images until both [maxImages] and [maxTotalBytes] are
+  /// satisfied. Only non-minimized images are evicted by the count limit (a
+  /// minimized image is a deliberate user pin); the byte limit, however, may
+  /// drop minimized images too, since they still hold memory.
+  void _enforceLimits() {
+    var current = state;
+
+    // 1) Count limit: drop oldest non-minimized until we have <= maxImages.
+    while (current.length > maxImages) {
+      final idx = current.indexWhere((img) => !img.minimized);
+      if (idx == -1) break; // all remaining are minimized — stop.
+      current = [...current..removeAt(idx)];
+    }
+
+    // 2) Byte limit: drop oldest overall until total <= maxTotalBytes.
+    int totalBytes() =>
+        current.fold<int>(0, (sum, img) => sum + img.rawBytes.length);
+    while (totalBytes() > maxTotalBytes && current.isNotEmpty) {
+      current = current.sublist(1);
+    }
+
+    state = current;
   }
 
   void removeImage(String id) {
@@ -40,6 +74,8 @@ class FloatingImagesNotifier extends StateNotifier<List<FloatingImage>> {
             requestedWidth: img.requestedWidth,
             requestedHeight: img.requestedHeight,
             scale: img.scale,
+            inline: img.inline,
+            preserveAspectRatio: img.preserveAspectRatio,
           )
         else
           img,
@@ -60,6 +96,8 @@ class FloatingImagesNotifier extends StateNotifier<List<FloatingImage>> {
             requestedWidth: img.requestedWidth,
             requestedHeight: img.requestedHeight,
             scale: img.scale,
+            inline: img.inline,
+            preserveAspectRatio: img.preserveAspectRatio,
           )
         else
           img,
@@ -80,6 +118,8 @@ class FloatingImagesNotifier extends StateNotifier<List<FloatingImage>> {
             requestedWidth: img.requestedWidth,
             requestedHeight: img.requestedHeight,
             scale: img.scale,
+            inline: img.inline,
+            preserveAspectRatio: img.preserveAspectRatio,
           )
         else
           img,
@@ -102,6 +142,8 @@ class FloatingImagesNotifier extends StateNotifier<List<FloatingImage>> {
             requestedWidth: img.requestedWidth,
             requestedHeight: img.requestedHeight,
             scale: clamped,
+            inline: img.inline,
+            preserveAspectRatio: img.preserveAspectRatio,
           )
         else
           img,
