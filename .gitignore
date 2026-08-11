@@ -46,3 +46,6 @@ app.*.map.json
 output/
 img-output/
 e2e-output/
+
+# ZCode session data
+.zcode/
