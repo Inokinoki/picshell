@@ -50,4 +50,6 @@ enum AuthType {
   password,
   @HiveField(1)
   key,
+  @HiveField(2)
+  agent,
 }

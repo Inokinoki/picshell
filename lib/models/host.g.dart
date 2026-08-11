@@ -75,6 +75,8 @@ class AuthTypeAdapter extends TypeAdapter<AuthType> {
         return AuthType.password;
       case 1:
         return AuthType.key;
+      case 2:
+        return AuthType.agent;
       default:
         return AuthType.password;
     }
@@ -88,6 +90,9 @@ class AuthTypeAdapter extends TypeAdapter<AuthType> {
         break;
       case AuthType.key:
         writer.writeByte(1);
+        break;
+      case AuthType.agent:
+        writer.writeByte(2);
         break;
     }
   }
