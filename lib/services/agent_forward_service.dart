@@ -1,5 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:dartssh2/dartssh2.dart';
+import 'dart:typed_data';
+
+typedef HostKeyVerifier
+    = FutureOr<bool> Function(String type, Uint8List fingerprint);
 
 class AgentForwardService {
   static Future<List<SSHKeyPair>> getAgentKeys() async {
@@ -31,10 +36,16 @@ class AgentForwardService {
     required String host,
     required int port,
     required String username,
+    HostKeyVerifier? onVerifyHostKey,
   }) async {
     final keys = await getAgentKeys();
 
     final socket = await SSHSocket.connect(host, port);
-    return SSHClient(socket, username: username, identities: keys);
+    return SSHClient(
+      socket,
+      username: username,
+      identities: keys,
+      onVerifyHostKey: onVerifyHostKey,
+    );
   }
 }

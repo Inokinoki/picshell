@@ -6,6 +6,33 @@ import 'agent_forward_service.dart';
 
 enum SshAuthMethod { password, key, agent }
 
+/// Result type for host-key verification injected into [SshConnectionConfig].
+/// Throwing [HostKeyMismatchException] / [UnknownHostException] from the
+/// callback lets the caller surface a trust prompt to the user.
+class HostKeyMismatchException implements Exception {
+  final String host;
+  final int port;
+  final String keyType;
+  final String fingerprint;
+  HostKeyMismatchException(this.host, this.port, this.keyType, this.fingerprint);
+  @override
+  String toString() =>
+      'Host key for $host:$port has changed! Possible MITM. '
+      '($keyType $fingerprint)';
+}
+
+class UnknownHostException implements Exception {
+  final String host;
+  final int port;
+  final String keyType;
+  final String fingerprint;
+  UnknownHostException(this.host, this.port, this.keyType, this.fingerprint);
+  @override
+  String toString() =>
+      'Unknown host $host:$port ($keyType $fingerprint). '
+      'Trust it before connecting.';
+}
+
 class SshConnectionConfig {
   final String host;
   final int port;
@@ -15,6 +42,14 @@ class SshConnectionConfig {
   final String? privateKeyPem;
   final String? passphrase;
 
+  /// Verifies the server's host key. Receives the key type and a raw
+  /// fingerprint (as dartssh2 provides). Return true to accept, false (or
+  /// throw) to reject. When null, host keys are NOT verified — preserved for
+  /// backward compatibility with existing tests, but production callers
+  /// should always supply one.
+  final FutureOr<bool> Function(String type, Uint8List fingerprint)?
+      onVerifyHostKey;
+
   SshConnectionConfig({
     required this.host,
     this.port = 22,
@@ -23,6 +58,7 @@ class SshConnectionConfig {
     this.password,
     this.privateKeyPem,
     this.passphrase,
+    this.onVerifyHostKey,
   });
 }
 
@@ -72,6 +108,7 @@ class SshService {
             socket,
             username: config.username,
             onPasswordRequest: () => config.password ?? '',
+            onVerifyHostKey: config.onVerifyHostKey,
           );
           break;
         case SshAuthMethod.key:
@@ -83,6 +120,7 @@ class SshService {
             socket,
             username: config.username,
             identities: keyPair,
+            onVerifyHostKey: config.onVerifyHostKey,
           );
           break;
         case SshAuthMethod.agent:
@@ -90,6 +128,7 @@ class SshService {
             host: config.host,
             port: config.port,
             username: config.username,
+            onVerifyHostKey: config.onVerifyHostKey,
           );
           if (agentClient != null) {
             client = agentClient;

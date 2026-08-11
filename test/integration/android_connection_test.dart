@@ -1,8 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive/hive.dart';
 import 'package:picshell/models/host.dart';
+import 'package:picshell/models/known_host.dart';
 import 'package:picshell/providers/session_provider.dart';
+import 'package:picshell/services/host_store.dart';
+import 'package:picshell/services/known_hosts_store.dart';
 import 'package:picshell/services/ssh_service.dart';
 
 void main() {
@@ -175,13 +180,25 @@ void main() {
 
   group('Session provider integration', () {
     late ProviderContainer container;
+    late Directory tempDir;
 
-    setUp(() {
-      container = ProviderContainer();
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('picshell_sess_test_');
+      Hive.init(tempDir.path);
+      if (!Hive.isAdapterRegistered(3)) {
+        Hive.registerAdapter(KnownHostAdapter());
+      }
+      final knownHosts = KnownHostsStore();
+      await knownHosts.init();
+      container = ProviderContainer(overrides: [
+        knownHostsStoreProvider.overrideWithValue(knownHosts),
+      ]);
     });
 
-    tearDown(() {
+    tearDown(() async {
       container.dispose();
+      await Hive.deleteFromDisk();
+      await tempDir.delete(recursive: true);
     });
 
     test('session provider handles connection failure gracefully', () async {

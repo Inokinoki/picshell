@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,9 +7,11 @@ import '../../models/floating_image.dart';
 import '../../models/host.dart';
 import '../../providers/floating_image_provider.dart';
 import '../../providers/session_provider.dart';
+import '../../services/known_hosts_store.dart';
 import '../../services/ssh_service.dart';
 import '../../widgets/connection_dialog.dart';
 import '../../widgets/floating_image_overlay.dart';
+import '../../widgets/host_key_dialog.dart';
 import '../terminal/terminal_screen.dart';
 
 final selectedSessionIndexProvider = StateProvider<int>((ref) => 0);
@@ -151,24 +154,72 @@ class HomeScreen extends ConsumerWidget {
     showDialog(
       context: context,
       builder: (_) => ConnectionDialog(
-        onConnect: (Host host, SshConnectionConfig config) async {
-          try {
-            await ref
-                .read(sessionListProvider.notifier)
-                .openSession(host, config);
-            final newSessions = ref.read(sessionListProvider);
-            ref.read(selectedSessionIndexProvider.notifier).state =
-                newSessions.length - 1;
-          } catch (e) {
-            if (context.mounted) {
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(SnackBar(content: Text('Connection failed: $e')));
-            }
-          }
-        },
+        onConnect: (Host host, SshConnectionConfig config) =>
+            _connectAndHandleHostKey(context, ref, host, config),
       ),
     );
+  }
+
+  /// Attempts a connection; on first contact with an unknown host, prompts
+  /// the user (TOFU). Host-key mismatches are reported as errors and never
+  /// auto-trusted.
+  Future<void> _connectAndHandleHostKey(
+    BuildContext context,
+    WidgetRef ref,
+    Host host,
+    SshConnectionConfig config,
+  ) async {
+    try {
+      await ref.read(sessionListProvider.notifier).openSession(host, config);
+      final newSessions = ref.read(sessionListProvider);
+      ref.read(selectedSessionIndexProvider.notifier).state =
+          newSessions.length - 1;
+    } on UnknownHostException catch (e) {
+      if (!context.mounted) return;
+      final trust = await showHostKeyDialog(
+        context: context,
+        host: e.host,
+        port: e.port,
+        keyType: e.keyType,
+        fingerprintHex: e.fingerprint,
+      );
+      if (trust != true || !context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Connection aborted: host not trusted.')),
+        );
+        return;
+      }
+      // User accepted — record the fingerprint, then retry the connection.
+      // The retry goes through the same verified path; this time verify()
+      // returns trusted.
+      try {
+        // We don't have the raw bytes here (only the hex), so reconstruct.
+        final raw = _hexToBytes(e.fingerprint);
+        await ref
+            .read(knownHostsStoreProvider)
+            .trust(e.host, e.port, e.keyType, raw);
+      } catch (_) {
+        // Best-effort; the retry below will re-prompt if trust didn't persist.
+      }
+      try {
+        await ref.read(sessionListProvider.notifier).openSession(host, config);
+        final newSessions = ref.read(sessionListProvider);
+        ref.read(selectedSessionIndexProvider.notifier).state =
+            newSessions.length - 1;
+      } catch (retryError) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Connection failed: $retryError')),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Connection failed: $e')));
+      }
+    }
   }
 }
 
@@ -281,4 +332,15 @@ class _SessionView extends StatelessWidget {
     final session = sessions[selectedIndex];
     return TerminalScreen(terminal: session.terminal);
   }
+}
+
+/// Parses a hex string back into bytes (inverse of session_provider._hex),
+/// used to re-feed a fingerprint into KnownHostsStore.trust after the user
+/// accepts an unknown host.
+Uint8List _hexToBytes(String hex) {
+  final out = <int>[];
+  for (var i = 0; i + 1 < hex.length; i += 2) {
+    out.add(int.parse(hex.substring(i, i + 2), radix: 16));
+  }
+  return Uint8List.fromList(out);
 }

@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'package:xterm/xterm.dart';
 import '../models/floating_image.dart';
 import '../models/host.dart';
+import '../services/known_hosts_store.dart';
 import '../services/ssh_service.dart';
 import 'floating_image_provider.dart';
 
@@ -50,6 +51,39 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
   }
 
   Future<void> openSession(Host host, SshConnectionConfig config) async {
+    // Inject host-key verification (TOFU). We build a derived config that
+    // carries an onVerifyHostKey callback consulting the known_hosts store;
+    // the original config from the UI does not have one. This derived config
+    // is what gets stored on the SessionState, so reconnects are verified too.
+    final knownHosts = _ref.read(knownHostsStoreProvider);
+    final verifiedConfig = SshConnectionConfig(
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      authMethod: config.authMethod,
+      password: config.password,
+      privateKeyPem: config.privateKeyPem,
+      passphrase: config.passphrase,
+      onVerifyHostKey: (type, fingerprint) async {
+        switch (await knownHosts.verify(
+          config.host, config.port, type, fingerprint,
+        )) {
+          case HostKeyVerification.trusted:
+            return true;
+          case HostKeyVerification.mismatch:
+            throw HostKeyMismatchException(
+              config.host, config.port, type,
+              _hex(fingerprint),
+            );
+          case HostKeyVerification.unknown:
+            throw UnknownHostException(
+              config.host, config.port, type,
+              _hex(fingerprint),
+            );
+        }
+      },
+    );
+
     final service = SshService();
     final terminal = Terminal(maxLines: 10000);
     final sessionId = _uuid.v4();
@@ -88,7 +122,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       sshService: service,
       terminal: terminal,
       createdAt: createdAt,
-      config: config,
+      config: verifiedConfig,
     );
     state = [...state, session];
 
@@ -104,7 +138,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     });
 
     try {
-      await service.connect(config);
+      await service.connect(verifiedConfig);
       state = [
         for (final s in state)
           if (s.id == session.id)
@@ -206,4 +240,13 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       }
     });
   }
+}
+
+/// Hex-encodes a byte list for display in host-key exception messages.
+String _hex(Uint8List bytes) {
+  final sb = StringBuffer();
+  for (final b in bytes) {
+    sb.write(b.toRadixString(16).padLeft(2, '0'));
+  }
+  return sb.toString();
 }
