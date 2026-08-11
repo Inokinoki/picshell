@@ -4,6 +4,7 @@ import '../screens/hosts/host_list_screen.dart';
 import '../screens/hosts/host_edit_screen.dart';
 import '../screens/keys/key_list_screen.dart';
 import '../screens/settings/settings_screen.dart';
+import '../screens/sftp/sftp_browser_screen.dart';
 
 final router = GoRouter(
   initialLocation: '/',
@@ -25,6 +26,12 @@ final router = GoRouter(
     GoRoute(
       path: '/keys',
       builder: (context, state) => const KeyListScreen(),
+    ),
+    GoRoute(
+      path: '/sftp/:sessionId',
+      builder: (context, state) => SftpBrowserScreen(
+        sessionId: state.pathParameters['sessionId']!,
+      ),
     ),
     GoRoute(
       path: '/settings',

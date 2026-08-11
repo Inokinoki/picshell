@@ -330,7 +330,33 @@ class _SessionView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final session = sessions[selectedIndex];
-    return TerminalScreen(terminal: session.terminal);
+    // Thin session toolbar above the terminal. Only shown when connected so
+    // the buttons (e.g. Open SFTP) don't lead somewhere that needs a live
+    // SSH session during connecting/reconnecting states.
+    return Column(
+      children: [
+        if (session.connected)
+          Material(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: SizedBox(
+              height: 36,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.folder_open, size: 18),
+                    tooltip: 'Open SFTP',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () =>
+                        context.push('/sftp/${session.id}'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        Expanded(child: TerminalScreen(terminal: session.terminal)),
+      ],
+    );
   }
 }
 
