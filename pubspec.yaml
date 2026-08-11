@@ -43,6 +43,7 @@ dependencies:
   flutter_keyboard_visibility: ^6.0.0
   xterm:
     path: packages/xterm
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

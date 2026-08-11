@@ -77,6 +77,11 @@ class SshService {
   Stream<bool> get connectionState => _connectionController.stream;
   bool get isConnected => _client != null && _session != null;
 
+  /// The live SSH client, or null when not connected. SFTP support opens a
+  /// subsystem on this client; callers must re-acquire it after a reconnect
+  /// (which replaces `_client`).
+  SSHClient? get client => _client;
+
   void _safeAddOutput(String data) {
     if (!_disposed && !_outputController.isClosed) {
       _outputController.add(data);
