@@ -26,6 +26,16 @@ RUN mkdir /var/run/sshd \
 # via env at test time; the file content is what downloads verify against.
 RUN echo 'picshell-sftp-smoke' > /picshell_sftp_marker.txt
 
+# Script the inline-image integration test invokes over the terminal. Emits an
+# iTerm2 OSC 1337 sequence carrying a minimal 1x1 PNG with the params the test
+# asserts on (name=t.png base64-encoded per spec, width=80, height=40). The
+# PNG bytes are inlined so we don't need ImageMagick in the image.
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"' \
+    'printf "\\033]1337;File=inline=1;name=dC5wbmc=;width=80;height=40:%s\\a\\n" "$B64"' \
+    > /tmp/send.sh && chmod +x /tmp/send.sh
+
 EXPOSE 2222
 
 # Run sshd on port 2222 (non-privileged would need rootless config; root in
