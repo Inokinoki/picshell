@@ -4,10 +4,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../models/floating_image.dart';
+import '../../models/forward_rule.dart';
 import '../../models/host.dart';
 import '../../providers/floating_image_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../services/known_hosts_store.dart';
+import '../../services/platform_capabilities.dart';
 import '../../services/ssh_service.dart';
 import '../../widgets/connection_dialog.dart';
 import '../../widgets/floating_image_overlay.dart';
@@ -66,6 +68,16 @@ class HomeScreen extends ConsumerWidget {
                   icon: const Icon(Icons.add),
                   onPressed: () => _showConnectDialog(context, ref),
                   tooltip: 'New Connection (Ctrl+N)',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.compare_arrows),
+                  onPressed: sessions.isEmpty
+                      ? null
+                      : () => _showForwardsSheet(
+                            context,
+                            sessions[clampedIndex],
+                          ),
+                  tooltip: 'Port Forwards',
                 ),
                 IconButton(
                   icon: const Icon(Icons.settings),
@@ -157,6 +169,17 @@ class HomeScreen extends ConsumerWidget {
         onConnect: (Host host, SshConnectionConfig config) =>
             _connectAndHandleHostKey(context, ref, host, config),
       ),
+    );
+  }
+
+  /// Opens a bottom sheet listing the current session's port-forward rules
+  /// with live status and manual start/stop controls. On mobile, a warning
+  /// reminds the user that forwards pause in the background.
+  void _showForwardsSheet(BuildContext context, SessionState session) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _ForwardsSheet(sessionId: session.id),
     );
   }
 
@@ -343,4 +366,160 @@ Uint8List _hexToBytes(String hex) {
     out.add(int.parse(hex.substring(i, i + 2), radix: 16));
   }
   return Uint8List.fromList(out);
+}
+
+class _ForwardsSheet extends ConsumerWidget {
+  final String sessionId;
+  const _ForwardsSheet({required this.sessionId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref
+        .watch(sessionListProvider)
+        .where((s) => s.id == sessionId)
+        .firstOrNull;
+    if (session == null) return const SizedBox.shrink();
+    final host = session.host;
+    final running = session.runningForwards;
+    final notifier = ref.read(sessionListProvider.notifier);
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!supportsBackgroundForward)
+              Container(
+                padding: const EdgeInsets.all(10),
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded,
+                        size: 18, color: Colors.amber.shade900),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Forwards pause when the app is in the background.',
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.amber.shade900),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            Text('Port Forwards',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            if (!session.connected)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  'Session is not connected. Auto-start forwards will run once it reconnects.',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
+              ),
+            if (host.forwards.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Text(
+                  'No forwards configured. Edit the host to add some.',
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
+              )
+            else
+              for (final rule in host.forwards)
+                _ForwardRow(
+                  rule: rule,
+                  running: running[rule.id],
+                  canStart: session.connected,
+                  onStart: () async {
+                    try {
+                      await notifier.startForward(sessionId, rule);
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('$e')),
+                        );
+                      }
+                    }
+                  },
+                  onStop: () => notifier.stopForward(sessionId, rule.id),
+                ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ForwardRow extends StatelessWidget {
+  final ForwardRule rule;
+  final ActiveForwardInfo? running;
+  final bool canStart;
+  final Future<void> Function() onStart;
+  final Future<void> Function() onStop;
+
+  const _ForwardRow({
+    required this.rule,
+    required this.running,
+    required this.canStart,
+    required this.onStart,
+    required this.onStop,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isRunning = running != null;
+    return ListTile(
+      leading: Icon(_iconFor(rule.type),
+          color: isRunning ? Colors.teal : null),
+      title: Text(rule.summary, style: const TextStyle(fontFamily: 'monospace')),
+      subtitle: Text(
+        isRunning
+            ? 'listening on :${running!.boundPort}'
+            : rule.autoStart
+                ? 'stopped (auto-starts on connect)'
+                : 'stopped',
+        style: TextStyle(
+          fontSize: 12,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+      trailing: isRunning
+          ? IconButton(
+              icon: const Icon(Icons.stop_circle_outlined),
+              tooltip: 'Stop',
+              onPressed: () {
+                onStop();
+              },
+            )
+          : IconButton(
+              icon: const Icon(Icons.play_circle_outline),
+              tooltip: 'Start',
+              onPressed: canStart
+                  ? () {
+                      onStart();
+                    }
+                  : null,
+            ),
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+    );
+  }
+
+  IconData _iconFor(ForwardType type) => switch (type) {
+        ForwardType.local => Icons.south_east,
+        ForwardType.remote => Icons.north_west,
+        ForwardType.socks => Icons.shuffle,
+      };
 }

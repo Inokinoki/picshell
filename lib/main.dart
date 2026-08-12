@@ -4,6 +4,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:picshell/app/app.dart';
 import 'package:picshell/models/host.dart';
+import 'package:picshell/models/forward_rule.dart';
 import 'package:picshell/models/ssh_key.dart';
 import 'package:picshell/models/session.dart';
 import 'package:picshell/models/known_host.dart';
@@ -17,6 +18,8 @@ void main() async {
   await Hive.initFlutter();
   Hive.registerAdapter(HostAdapter());
   Hive.registerAdapter(AuthTypeAdapter());
+  Hive.registerAdapter(ForwardTypeAdapter());
+  Hive.registerAdapter(ForwardRuleAdapter());
   Hive.registerAdapter(SshKeyAdapter());
   Hive.registerAdapter(SessionAdapter());
   Hive.registerAdapter(KnownHostAdapter());

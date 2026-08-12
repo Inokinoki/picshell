@@ -56,17 +56,7 @@ class HostStore {
 
   Host _encryptHost(Host host) {
     if (host.password == null || host.password!.isEmpty) return host;
-    return Host(
-      id: host.id,
-      name: host.name,
-      hostname: host.hostname,
-      port: host.port,
-      username: host.username,
-      authType: host.authType,
-      keyId: host.keyId,
-      password: _cipher.encrypt(host.password!),
-      groupId: host.groupId,
-    );
+    return host.copyWith(password: _cipher.encrypt(host.password!));
   }
 
   Host _decryptHost(Host host) {
@@ -74,17 +64,7 @@ class HostStore {
     final plain = _cipher.decrypt(host.password!);
     // If decryption fails (e.g. passphrase mismatch, or the value was never
     // encrypted), fall back to the stored value rather than losing the host.
-    return Host(
-      id: host.id,
-      name: host.name,
-      hostname: host.hostname,
-      port: host.port,
-      username: host.username,
-      authType: host.authType,
-      keyId: host.keyId,
-      password: plain ?? host.password,
-      groupId: host.groupId,
-    );
+    return host.copyWith(password: plain ?? host.password);
   }
 
   // SSH Key CRUD

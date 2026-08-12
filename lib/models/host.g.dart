@@ -26,13 +26,15 @@ class HostAdapter extends TypeAdapter<Host> {
       keyId: fields[6] as String?,
       password: fields[7] as String?,
       groupId: fields[8] as String?,
+      proxyHostId: fields[9] as String?,
+      forwards: (fields[10] as List?)?.cast<ForwardRule>(),
     );
   }
 
   @override
   void write(BinaryWriter writer, Host obj) {
     writer
-      ..writeByte(9)
+      ..writeByte(11)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -50,7 +52,11 @@ class HostAdapter extends TypeAdapter<Host> {
       ..writeByte(7)
       ..write(obj.password)
       ..writeByte(8)
-      ..write(obj.groupId);
+      ..write(obj.groupId)
+      ..writeByte(9)
+      ..write(obj.proxyHostId)
+      ..writeByte(10)
+      ..write(obj.forwards);
   }
 
   @override
