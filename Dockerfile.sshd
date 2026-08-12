@@ -9,11 +9,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Configure sshd: root login + password auth + default sftp subsystem (the
 # openssh-server package ships with `Subsystem sftp /usr/lib/openssh/sftp-server`
-# in sshd_config, so SFTP works out of the box).
+# in sshd_config, so SFTP works out of the box). The relaxed LoginGraceTime /
+# MaxStartups / ClientAlive settings tolerate the higher latency and parallel
+# test connections of the Android-emulator CI path, where the default values
+# can cause "Connection closed while waiting for channel open".
 RUN mkdir /var/run/sshd \
     && echo 'root:testpass' | chpasswd \
     && echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config \
-    && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && echo 'LoginGraceTime 300' >> /etc/ssh/sshd_config \
+    && echo 'MaxStartups 50:30:100' >> /etc/ssh/sshd_config \
+    && echo 'ClientAliveInterval 60' >> /etc/ssh/sshd_config \
+    && echo 'ClientAliveCountMax 10' >> /etc/ssh/sshd_config
 
 # A marker file SFTP smoke tests can list/read. The host/port are passed in
 # via env at test time; the file content is what downloads verify against.

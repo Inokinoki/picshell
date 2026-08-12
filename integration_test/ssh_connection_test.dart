@@ -86,6 +86,55 @@ class _AlwaysTrustKnownHostsStore implements KnownHostsStore {
   ) async {}
 }
 
+/// Drives an SSH session open against the test sshd, retrying on handshake
+/// failures. The Android emulator → host (10.0.2.2) network path is
+/// occasionally flaky, and dartssh2 raises SSHStateError("Connection closed
+/// while waiting for channel open") if the transport drops mid-handshake.
+/// Retrying absorbs that transient failure without masking real bugs (a
+/// deterministic connection failure still surfaces after maxAttempts).
+///
+/// Returns true once a session reaches the connected state.
+Future<bool> _connectWithRetry(
+  WidgetTester tester,
+  ProviderContainer container,
+  Host host,
+  SshConnectionConfig config, {
+  int maxAttempts = 3,
+}) async {
+  final notifier = container.read(sessionListProvider.notifier);
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await notifier.openSession(host, config);
+    } catch (e) {
+      // Handshake threw; clean up any half-open session and back off.
+      final sessions = container.read(sessionListProvider);
+      for (final s in sessions) {
+        try {
+          notifier.closeSession(s.id);
+        } catch (_) {}
+      }
+      if (attempt == maxAttempts) rethrow;
+      await tester.pump(Duration(seconds: 2 * attempt));
+      continue;
+    }
+
+    // Poll for the connected state.
+    for (int i = 0; i < 60; i++) {
+      await tester.pump(const Duration(seconds: 1));
+      final sessions = container.read(sessionListProvider);
+      if (sessions.isNotEmpty && sessions.first.connected) return true;
+    }
+    // Connected state not reached within the window; close and retry.
+    final sessions = container.read(sessionListProvider);
+    for (final s in sessions) {
+      try {
+        notifier.closeSession(s.id);
+      } catch (_) {}
+    }
+  }
+  return false;
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -118,24 +167,10 @@ void main() {
         password: _sshPass,
       );
 
-      await container
-          .read(sessionListProvider.notifier)
-          .openSession(host, config);
-
-      // Poll for the session to come up; SSH handshake + auth takes a few
-      // seconds on the emulator.
-      bool connected = false;
-      for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
-        final sessions = container.read(sessionListProvider);
-        if (sessions.isNotEmpty && sessions.first.connected) {
-          connected = true;
-          break;
-        }
-      }
+      final connected = await _connectWithRetry(tester, container, host, config);
 
       expect(connected, isTrue,
-          reason: 'SSH session should reach connected state within 60s');
+          reason: 'SSH session should reach connected state within retries');
 
       container.dispose();
     }, timeout: const Timeout(Duration(minutes: 2)));
@@ -167,20 +202,7 @@ void main() {
         authMethod: SshAuthMethod.password,
         password: _sshPass,
       );
-      await container
-          .read(sessionListProvider.notifier)
-          .openSession(host, config);
-
-      // Wait for the session to be connected and the shell to be ready.
-      bool connected = false;
-      for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
-        final sessions = container.read(sessionListProvider);
-        if (sessions.isNotEmpty && sessions.first.connected) {
-          connected = true;
-          break;
-        }
-      }
+      final connected = await _connectWithRetry(tester, container, host, config);
       expect(connected, isTrue, reason: 'session should connect');
 
       final terminal = container.read(sessionListProvider).first.terminal;
@@ -245,18 +267,7 @@ void main() {
         authMethod: SshAuthMethod.password,
         password: _sshPass,
       );
-      await container
-          .read(sessionListProvider.notifier)
-          .openSession(host, config);
-
-      for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
-        if (container
-            .read(sessionListProvider)
-            .isNotEmpty && container.read(sessionListProvider).first.connected) {
-          break;
-        }
-      }
+      await _connectWithRetry(tester, container, host, config);
 
       final terminal = container.read(sessionListProvider).first.terminal;
       await tester.pump(const Duration(seconds: 2));
@@ -333,17 +344,9 @@ void main() {
         authMethod: SshAuthMethod.password,
         password: _sshPass,
       );
-      await container.read(sessionListProvider.notifier).openSession(host, config);
-
-      // Poll until connected (handshake + auth takes a few seconds).
-      for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
-        final sessions = container.read(sessionListProvider);
-        if (sessions.isNotEmpty && sessions.first.connected) break;
-      }
+      final connected = await _connectWithRetry(tester, container, host, config);
+      expect(connected, isTrue, reason: 'SFTP smoke needs a connected session');
       final sessions = container.read(sessionListProvider);
-      expect(sessions.isNotEmpty && sessions.first.connected, isTrue,
-          reason: 'SFTP smoke needs a connected session');
       return SftpService(sessions.first.sshService);
     }
 
