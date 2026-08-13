@@ -25,6 +25,23 @@ class HostStore {
     _cipher = SecretCipher(passphrase: passphrase);
   }
 
+  /// Re-encrypts every stored secret under [newPassphrase]. Captures all hosts
+  /// and keys decrypted under the *current* cipher, swaps the cipher, then
+  /// re-writes each record so they decrypt correctly under the new key. Pass
+  /// '' to store everything as plaintext (used when disabling the biometric
+  /// vault). Idempotent under repeated calls with the same passphrase.
+  Future<void> reEncryptAll(String newPassphrase) async {
+    final hosts = getHosts(); // already decrypted under the current cipher
+    final keys = getKeys();
+    setPassphrase(newPassphrase);
+    for (final h in hosts) {
+      await _hosts.put(h.id, _encryptHost(h));
+    }
+    for (final k in keys) {
+      await _keys.put(k.id, _encryptKey(k));
+    }
+  }
+
   /// Whether secrets are currently being encrypted (non-empty passphrase).
   bool get isEncrypting => _cipher.encrypt('x') != 'x';
 

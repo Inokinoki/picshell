@@ -146,4 +146,60 @@ void main() {
       expect(got!.password, isNot(equals('real-secret')));
     });
   });
+
+  group('reEncryptAll', () {
+    test('re-encrypts hosts and keys under a new passphrase', () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'h1',
+        name: 'Host',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'pw-secret',
+      ));
+      await store.addKey(SshKey(
+        id: 'k1',
+        name: 'work',
+        privateKeyPem: '-----BEGIN PRIVATE KEY-----\nBODY\n-----END-----',
+        publicKey: 'ssh-ed25519 AAAA',
+      ));
+
+      // Swap to a different key; everything must still decrypt cleanly.
+      await store.reEncryptAll('key2');
+      expect(store.getHost('h1')?.password, 'pw-secret');
+      expect(store.getKey('k1')?.privateKeyPem, contains('BODY'));
+    });
+
+    test('reEncryptAll to empty passphrase stores plaintext (disable vault)',
+        () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'h2',
+        name: 'Host',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'plain-again',
+      ));
+
+      await store.reEncryptAll('');
+
+      // Raw box now holds the plaintext directly (no encryption).
+      final rawBox = Hive.box<Host>('hosts');
+      expect(rawBox.get('h2')?.password, 'plain-again');
+      // And decryption (now a passthrough) still returns it.
+      expect(store.getHost('h2')?.password, 'plain-again');
+    });
+
+    test('reEncryptAll leaves passwordless hosts intact', () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'h3',
+        name: 'NoPw',
+        hostname: '1.2.3.4',
+        username: 'root',
+      ));
+      await store.reEncryptAll('key2');
+      expect(store.getHost('h3')?.password, isNull);
+    });
+  });
 }
