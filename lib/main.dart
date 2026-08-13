@@ -60,24 +60,38 @@ void main() async {
 /// succeed). When biometrics succeed the master key is released to the
 /// [HostStore], enabling at-rest decryption.
 ///
-/// When biometrics are not required or not available, the app starts unlocked
-/// and credentials remain stored as before (backward compatible).
+/// When biometrics are not required, the app starts unlocked and credentials
+/// remain stored as before (backward compatible).
+///
+/// If biometrics are required but the device can no longer prompt (e.g. the
+/// user deleted all enrolled prints after enabling), we cannot biometrically
+/// gate — but we MUST still release the existing master key to [HostStore] so
+/// saved credentials decrypt correctly. Otherwise the empty-passphrase cipher
+/// would surface their ciphertext as plaintext passwords, and any later
+/// "disable" would overwrite the real secrets with that garbage (silent
+/// permanent data loss). Reading the key without a prompt is consistent with
+/// the threat model (the gate is app-enforced, not OS-enforced; see
+/// VaultService) and only happens when there is no biometric to prompt with.
 Future<bool> _initialUnlock(HostStore hostStore, VaultService vault) async {
   final settingsBox = await Hive.openBox('settings');
   final requireBiometric =
       settingsBox.get(SettingsNotifier.biometricKey, defaultValue: false) as bool;
   if (!requireBiometric) return false;
 
-  if (!await vault.canAuthenticate) {
-    // Required but unsupported on this device — proceed unlocked rather than
-    // bricking the app. The user can disable the toggle in settings.
-    return false;
+  if (await vault.canAuthenticate) {
+    if (await vault.authenticate()) {
+      hostStore.setPassphrase(await vault.getMasterKey());
+      return false; // unlocked
+    }
+    // User cancelled or biometrics failed — show the lock screen for retry.
+    return true;
   }
 
-  if (await vault.authenticate()) {
-    hostStore.setPassphrase(await vault.getMasterKey());
-    return false; // unlocked
-  }
-  // User cancelled or biometrics failed — show the lock screen for retry.
-  return true;
+  // Required but biometrics unavailable now. Best-effort recover the existing
+  // key so credentials still decrypt (prevents data loss). If no key was ever
+  // enrolled (shouldn't happen with require=true) there is nothing encrypted
+  // to misread, so proceeding unlocked is safe.
+  final existing = await vault.existingMasterKey;
+  if (existing != null) hostStore.setPassphrase(existing);
+  return false;
 }

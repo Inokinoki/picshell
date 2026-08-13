@@ -29,12 +29,23 @@ abstract class VaultBackend {
 
 /// Manages the device-bound master passphrase that encrypts saved credentials
 /// at rest (via [HostStore.setPassphrase]). The passphrase is a random 32-byte
-/// value generated on first use and stored in the platform secret store; it is
-/// released to the app only after a successful biometric prompt.
+/// value generated on first use and stored in the platform secret store.
 ///
 /// Model: **device key + biometric, no user master password**. The user never
 /// sees or types the passphrase, so it cannot be forgotten. The trade-off is
 /// that wiping the app (and thus the keystore entry) makes already-encrypted
+/// credentials unrecoverable — the connection metadata survives, passwords do
+/// not.
+///
+/// **Threat-model caveat (v1):** the biometric gate is enforced in Dart
+/// (the app only calls [setPassphrase] after a prompt), NOT by the OS keychain.
+/// The master key itself is readable from the platform secret store without a
+/// biometric (see [existingMasterKey]). This defeats raw disk extraction and
+/// the casual unlocked-phone snoop, but an attacker with disk access *and* the
+/// keystore entry (rooted/jailbroken device, or forensic extraction while
+/// unlocked) can recover credentials without a biometric. True biometric-bound
+/// encryption would need SecAccessControl(biometryAny) / CryptoObject, which
+/// local_auth 2.x does not expose from Dart — tracked as a v2 follow-up.
 /// credentials unrecoverable — the connection metadata survives, passwords do
 /// not.
 class VaultService {
@@ -45,6 +56,12 @@ class VaultService {
 
   /// Whether a master key has already been enrolled on this device.
   Future<bool> get isEnrolled async => (await _backend.readKey()) != null;
+
+  /// Returns the enrolled master key without generating one, or null if none
+  /// is stored. Used for best-effort recovery when biometrics are configured
+  /// but temporarily unavailable (so credentials still decrypt instead of
+  /// being surfaced as ciphertext).
+  Future<String?> get existingMasterKey => _backend.readKey();
 
   /// Returns the master key, generating and persisting a fresh random one on
   /// first call. Idempotent: once enrolled, the same key is returned forever.

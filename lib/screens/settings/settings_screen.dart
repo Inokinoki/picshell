@@ -179,25 +179,31 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
 
   Future<void> _toggleRequire(bool value) async {
     if (_busy) return;
-    final settings = ref.read(settingsProvider);
     final vault = ref.read(vaultServiceProvider);
     final hostStore = ref.read(hostStoreProvider);
 
     if (value) {
       final confirmed = await _confirmEnable();
       if (!confirmed || !mounted) return;
-      setState(() => _busy = true);
-      // Enroll a device key and re-encrypt everything under it, immediately.
-      final key = await vault.getMasterKey();
-      await hostStore.reEncryptAll(key);
-      await ref.read(settingsProvider.notifier).setRequireBiometric(true);
-    } else {
-      setState(() => _busy = true);
-      // Restore plaintext so credentials stay readable without the key.
-      await hostStore.reEncryptAll('');
-      await ref.read(settingsProvider.notifier).setRequireBiometric(false);
     }
-    if (mounted) setState(() => _busy = false);
+    setState(() => _busy = true);
+    try {
+      if (value) {
+        // Enroll a device key and re-encrypt everything under it, immediately.
+        final key = await vault.getMasterKey();
+        await hostStore.reEncryptAll(key);
+        await ref.read(settingsProvider.notifier).setRequireBiometric(true);
+      } else {
+        // Restore plaintext so credentials stay readable without the key,
+        // then drop the now-orphaned device key for symmetry.
+        await hostStore.reEncryptAll('');
+        await ref.read(settingsProvider.notifier).setRequireBiometric(false);
+        await vault.unenroll();
+      }
+    } finally {
+      // Never leave the toggle stuck busy / half-flipped on an error.
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<bool> _confirmEnable() async {

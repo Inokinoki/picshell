@@ -30,6 +30,15 @@ class HostStore {
   /// re-writes each record so they decrypt correctly under the new key. Pass
   /// '' to store everything as plaintext (used when disabling the biometric
   /// vault). Idempotent under repeated calls with the same passphrase.
+  ///
+  /// **Atomicity:** Hive has no multi-record transaction, so a crash mid-loop
+  /// can leave some records under the new key and the rest under the old one.
+  /// The per-record `put` is atomic; the decrypt fallback (`plain ??
+  /// host.password`) prevents null/crash on a mismatch, but old-key records'
+  /// passwords would surface as ciphertext. The re-encrypt runs from a captured
+  /// plaintext snapshot, so re-running after a partial failure re-captures the
+  /// (now mixed) state — callers should avoid interrupting it. A transactional
+  /// staging box is a tracked follow-up.
   Future<void> reEncryptAll(String newPassphrase) async {
     final hosts = getHosts(); // already decrypted under the current cipher
     final keys = getKeys();
