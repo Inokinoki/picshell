@@ -11,6 +11,8 @@ import 'package:xterm/src/core/cursor.dart';
 import 'package:xterm/src/core/escape/emitter.dart';
 import 'package:xterm/src/core/escape/handler.dart';
 import 'package:xterm/src/graphics/kitty.dart';
+import 'package:xterm/src/graphics/png_encoder.dart';
+import 'package:xterm/src/graphics/sixel.dart';
 import 'package:xterm/src/core/escape/parser.dart';
 import 'package:xterm/src/core/input/handler.dart';
 import 'package:xterm/src/core/input/keys.dart';
@@ -989,9 +991,24 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
   @override
   void dcs(String intermediates, String data) {
-    // Device Control String — Sixel graphics land here. Phase 2 will parse
-    // `intermediates` (params + the `q` final byte) and rasterise `data`.
-    // For now the sequence is consumed (it no longer leaks into the buffer).
+    // Device Control String — Sixel graphics: the final byte is `q`.
+    // `intermediates` is the leading command prefix (params + `q`), e.g.
+    // `0;0;0q` or `q`; `data` is the sixel body.
+    if (intermediates.endsWith('q')) {
+      final image = SixelDecoder().decode(data);
+      if (image != null) {
+        final png = pngEncode(image.rgba, image.width, image.height);
+        onImageDecoded?.call(
+          png,
+          'sixel',
+          image.width,
+          image.height,
+          inline: true,
+          preserveAspectRatio: true,
+        );
+      }
+    }
+    // Other DCS commands are ignored.
   }
 
   /// Single-sequence iTerm2 image: `File=params:base64`. The params and the
