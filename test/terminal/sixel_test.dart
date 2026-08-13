@@ -121,5 +121,35 @@ void main() {
       expect(bytes.sublist(0, 8),
           [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     });
+
+    test('DECRQSS (DCS \$q prefix) is not rasterised into a phantom image', () {
+      final terminal = Terminal(maxLines: 1000);
+      final received = <String>[];
+      terminal.onImageDecoded = (b, n, w, h,
+          {inline = true, preserveAspectRatio = true}) => received.add(n);
+      // DCS $ q ... ST is a settings query; its text body must not be drawn.
+      terminal.write('\x1bP\$qm\x1b\\');
+      terminal.write('\x1bP\$q"p\x1b\\');
+      expect(received.length, 0);
+    });
+
+    test('malformed Sixel never throws out of terminal.write()', () {
+      final terminal = Terminal(maxLines: 1000);
+      terminal.onImageDecoded = (_, __, ___, ____, {inline = true, preserveAspectRatio = true}) {};
+      expect(
+        () => terminal.write('\x1bPq#!!!@@@garbage\x1b\\'),
+        returnsNormally,
+      );
+    });
+  });
+
+  group('SixelDecoder hardening', () {
+    test('a runaway !N repeat is clamped, not spun / OOMed', () {
+      final img = SixelDecoder().decode('#0;2;100;0;0!999999999~');
+      // Clamped to maxRepeat columns of a single 6-row band.
+      expect(img, isNotNull);
+      expect(img!.width, SixelDecoder.maxRepeat);
+      expect(img.height, 6);
+    });
   });
 }

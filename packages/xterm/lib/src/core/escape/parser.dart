@@ -1154,7 +1154,13 @@ class EscapeParser {
       final char = _queue.consume();
       if (char == Ascii.BEL) return true;
       if (char == Ascii.ESC) {
-        if (_queue.isEmpty) return true;
+        if (_queue.isEmpty) {
+          // ST (ESC \) straddles a write() chunk boundary — hand back the
+          // consumed bytes so the whole sequence is re-driven once more data
+          // arrives (mirrors _consumeOsc). Returning true here would drop the
+          // sequence and leak a literal backslash into the text grid.
+          return false;
+        }
         _queue.consume(); // backslash of ST
         return true;
       }
@@ -1174,7 +1180,10 @@ class EscapeParser {
       final char = _queue.consume();
       if (char == Ascii.BEL) return true;
       if (char == Ascii.ESC) {
-        if (_queue.isEmpty) return true;
+        if (_queue.isEmpty) {
+          // Partial ST — rollback and retry on the next write() (see above).
+          return false;
+        }
         _queue.consume(); // backslash of ST
         return true;
       }

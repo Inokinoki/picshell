@@ -33,6 +33,11 @@ class KittyGraphicsHandler {
   // Pending multi-chunk transfer.
   _Pending? _pending;
 
+  /// Cap on the reassembled payload, to bound memory on untrusted input
+  /// (a stream of m=1 chunks with no terminating m=0 would otherwise grow
+  /// the accumulator forever).
+  static const maxAccumulatedBytes = 64 * 1024 * 1024; // 64 MiB
+
   /// [payload] is the full APC content after `ESC _` (begins with `G`).
   void handle(String payload) {
     if (payload.isEmpty) return;
@@ -45,6 +50,13 @@ class KittyGraphicsHandler {
         _parseParams(paramsStr.startsWith('G') ? paramsStr.substring(1) : paramsStr);
     final more = params['m'] == '1';
 
+    // A chunk carrying `a=` (a fresh transmit) while a transfer is already
+    // pending means the previous transfer's m=0 was lost — drop the orphan so
+    // it doesn't swallow this image into the wrong id/dimensions.
+    if (params.containsKey('a') && _pending != null) {
+      _pending = null;
+    }
+
     if (more) {
       _pending ??= _Pending(
         imageId: int.tryParse(params['i'] ?? ''),
@@ -52,6 +64,11 @@ class KittyGraphicsHandler {
         height: int.tryParse(params['v'] ?? ''),
         format: params['f'] ?? '100',
       );
+      if (_pending!.buffer.length + dataPart.length > maxAccumulatedBytes) {
+        // Oversized / runaway transfer — drop it entirely.
+        _pending = null;
+        return;
+      }
       _pending!.buffer.write(dataPart);
       return;
     }
@@ -59,6 +76,10 @@ class KittyGraphicsHandler {
     // m==0 or absent: final (or single) chunk.
     final pending = _pending;
     if (pending != null) {
+      if (pending.buffer.length + dataPart.length > maxAccumulatedBytes) {
+        _pending = null;
+        return;
+      }
       pending.buffer.write(dataPart);
       _pending = null;
       _emit(pending);

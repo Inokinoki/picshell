@@ -92,6 +92,35 @@ void main() {
       terminal.write('\x1b_Esome-payload$_st');
       expect(received.length, 0);
     });
+
+    test('ST terminator split across write() chunks still decodes', () {
+      final png = base64.decode(_png1x1B64);
+      final b64 = base64.encode(png);
+      final seq = '\x1b_Ga=T,f=100;$b64\x1b\\'; // ends ESC backslash
+      // Cut so ESC is the last char of part1 and the backslash starts part2.
+      terminal.write(seq.substring(0, seq.length - 1));
+      expect(received.length, 0, reason: 'no image before ST completes');
+      // And the lone ESC must not leak a backslash into the buffer.
+      expect(terminal.buffer.getText(), isNot(contains('\\')));
+
+      terminal.write(seq.substring(seq.length - 1));
+      expect(received.length, 1);
+      expect(received[0]['bytes'], png);
+    });
+
+    test('orphaned multi-chunk transfer does not swallow the next image', () {
+      // First image starts chunked (m=1) but its m=0 never arrives.
+      terminal.write('\x1b_Ga=T,f=100,i=1,m=1;AAAA$_st');
+      expect(received.length, 0);
+
+      // A new image (a=T) arrives — it must emit on its own, not be appended
+      // to the orphan's buffer / image id.
+      final png = base64.decode(_png1x1B64);
+      terminal.write('\x1b_Ga=T,f=100,i=2;${base64.encode(png)}$_st');
+      expect(received.length, 1);
+      expect(received[0]['name'], 'kitty-2');
+      expect(received[0]['bytes'], png);
+    });
   });
 
   group('DCS / Sixel handling', () {

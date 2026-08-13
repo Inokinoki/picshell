@@ -30,6 +30,12 @@ class _Color {
 /// Two passes: measure the drawn extent, then rasterise into an allocated
 /// buffer. Undrawn pixels are transparent.
 class SixelDecoder {
+  /// Cap on a single `!N` repeat and on total decoded pixels, to bound work on
+  /// untrusted remote output (a `!999999999~` would otherwise spin the CPU in
+  /// the measure pass and OOM on allocation).
+  static const maxRepeat = 4096;
+  static const maxPixels = 1 << 23; // 8 Mpx ≈ 32 MiB RGBA
+
   SixelImage? decode(String data) {
     var maxX = 0;
     var maxBand = 0; // number of 6-row bands touched
@@ -42,6 +48,10 @@ class SixelDecoder {
 
     final width = maxX;
     final height = maxBand * 6;
+    // Refuse pathological sizes before allocating ~4 bytes/pixel.
+    if (width > maxPixels || height > maxPixels || width * height > maxPixels) {
+      return null;
+    }
     final rgba = Uint8List(width * height * 4); // zeros = fully transparent
     _walk(data, (x, y, r, g, b) {
       final idx = (y * width + x) * 4;
@@ -116,7 +126,8 @@ class SixelDecoder {
           nBuf.writeCharCode(units[i]);
           i++;
         }
-        final n = nBuf.isEmpty ? 1 : int.tryParse(nBuf.toString()) ?? 1;
+        final n = (nBuf.isEmpty ? 1 : int.tryParse(nBuf.toString()) ?? 1)
+            .clamp(1, maxRepeat); // bound !N (DoS hardening)
         if (i >= units.length) break;
         drawSixel(units[i], n);
         i++;

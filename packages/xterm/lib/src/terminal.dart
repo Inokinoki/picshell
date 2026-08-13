@@ -993,8 +993,11 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   void dcs(String intermediates, String data) {
     // Device Control String — Sixel graphics: the final byte is `q`.
     // `intermediates` is the leading command prefix (params + `q`), e.g.
-    // `0;0;0q` or `q`; `data` is the sixel body.
-    if (intermediates.endsWith('q')) {
+    // `0;0;0q` or `q`; `data` is the sixel body. Reject anything with an
+    // intermediate byte before `q` (e.g. `$q` = DECRQSS), whose text body
+    // would otherwise rasterise into a phantom image.
+    if (!_isSixelPrefix(intermediates)) return;
+    try {
       final image = SixelDecoder().decode(data);
       if (image != null) {
         final png = pngEncode(image.rgba, image.width, image.height);
@@ -1007,8 +1010,21 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
           preserveAspectRatio: true,
         );
       }
+    } catch (_) {
+      // A pathological Sixel/PNG input must never escape terminal.write() and
+      // kill the session — drop the image instead.
     }
-    // Other DCS commands are ignored.
+  }
+
+  /// True iff [prefix] is a Sixel command: optional params (bytes 0x30-0x3f)
+  /// followed by the `q` final byte, with no intermediate bytes (0x20-0x2f).
+  bool _isSixelPrefix(String prefix) {
+    if (!prefix.endsWith('q')) return false;
+    for (var i = 0; i < prefix.length - 1; i++) {
+      final c = prefix.codeUnitAt(i);
+      if (c < 0x30 || c > 0x3f) return false;
+    }
+    return true;
   }
 
   /// Single-sequence iTerm2 image: `File=params:base64`. The params and the
