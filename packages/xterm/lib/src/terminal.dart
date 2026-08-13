@@ -10,6 +10,7 @@ import 'package:xterm/src/core/buffer/line.dart';
 import 'package:xterm/src/core/cursor.dart';
 import 'package:xterm/src/core/escape/emitter.dart';
 import 'package:xterm/src/core/escape/handler.dart';
+import 'package:xterm/src/graphics/kitty.dart';
 import 'package:xterm/src/core/escape/parser.dart';
 import 'package:xterm/src/core/input/handler.dart';
 import 'package:xterm/src/core/input/keys.dart';
@@ -152,6 +153,24 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     bool inline,
     bool preserveAspectRatio,
   })? onImageDecoded;
+
+  /// Decodes Kitty graphics-protocol APC payloads into [onImageDecoded].
+  /// Lazily built so it picks up whatever callback the app installs.
+  KittyGraphicsHandler? _kitty;
+  KittyGraphicsHandler get _kittyHandler {
+    return _kitty ??= KittyGraphicsHandler(
+      onImage: (bytes, imageId, width, height) {
+        onImageDecoded?.call(
+          bytes,
+          imageId == null ? 'kitty' : 'kitty-$imageId',
+          width,
+          height,
+          inline: true,
+          preserveAspectRatio: true,
+        );
+      },
+    );
+  }
 
   /* TerminalState */
 
@@ -957,6 +976,22 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     } else {
       onPrivateOSC?.call(ps, pt);
     }
+  }
+
+  @override
+  void apc(String data) {
+    // Kitty graphics protocol: `ESC _ G ... ST`. The captured [data] begins
+    // with the `G` command byte. Other APC commands are ignored.
+    if (data.startsWith('G')) {
+      _kittyHandler.handle(data);
+    }
+  }
+
+  @override
+  void dcs(String intermediates, String data) {
+    // Device Control String — Sixel graphics land here. Phase 2 will parse
+    // `intermediates` (params + the `q` final byte) and rasterise `data`.
+    // For now the sequence is consumed (it no longer leaks into the buffer).
   }
 
   /// Single-sequence iTerm2 image: `File=params:base64`. The params and the

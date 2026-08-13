@@ -592,4 +592,14 @@ class _TerminalDebuggerHandler implements EscapeHandler {
   void unknownOSC(String code, List<String> args) {
     onCommand('unknownOSC($code, $args)', error: true);
   }
+
+  @override
+  void apc(String data) {
+    onCommand('apc(${data.length} bytes)', error: true);
+  }
+
+  @override
+  void dcs(String intermediates, String data) {
+    onCommand('dcs($intermediates, ${data.length} bytes)', error: true);
+  }
 }

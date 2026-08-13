@@ -100,7 +100,8 @@ class EscapeParser {
     'E'.charCode: _escHandleNextLine,
     'H'.charCode: _escHandleTabSet,
     'M'.charCode: _escHandleReverseIndex,
-    // 'P'.charCode: _unsupportedHandler, // Sixel
+    'P'.charCode: _escHandleDcs, // DCS — Sixel graphics (ESC P ... ST)
+    '_'.charCode: _escHandleApc, // APC — Kitty graphics (ESC _ ... ST)
     // 'c'.charCode: _unsupportedHandler,
     // '#'.charCode: _unsupportedHandler,
     '('.charCode: _escHandleDesignateCharset0, //  SCS - G0
@@ -1121,6 +1122,75 @@ class EscapeParser {
       }
 
       param.writeCharCode(char);
+    }
+  }
+
+  final _apcPayload = StringBuffer();
+  final _dcsPayload = StringBuffer();
+  String _dcsCommand = '';
+
+  /// `ESC _ ... ST` — Application Program Command (Kitty graphics). The whole
+  /// payload is handed to [EscapeHandler.apc] as one string.
+  bool _escHandleApc() {
+    if (!_consumeUntilSt(_apcPayload)) return false;
+    handler.apc(_apcPayload.toString());
+    return true;
+  }
+
+  /// `ESC P ... ST` — Device Control String (Sixel graphics). The leading
+  /// command prefix (params + final byte, e.g. `q`) and the data body are
+  /// handed to [EscapeHandler.dcs].
+  bool _escHandleDcs() {
+    if (!_consumeDcs()) return false;
+    handler.dcs(_dcsCommand, _dcsPayload.toString());
+    return true;
+  }
+
+  /// Collects everything up to BEL or ST into [buffer] as a single string.
+  bool _consumeUntilSt(StringBuffer buffer) {
+    buffer.clear();
+    while (true) {
+      if (_queue.isEmpty) return false;
+      final char = _queue.consume();
+      if (char == Ascii.BEL) return true;
+      if (char == Ascii.ESC) {
+        if (_queue.isEmpty) return true;
+        _queue.consume(); // backslash of ST
+        return true;
+      }
+      buffer.writeCharCode(char);
+    }
+  }
+
+  /// Consumes a DCS sequence. The leading command prefix (param bytes
+  /// 0x30-0x3f, intermediates 0x20-0x2f, and the final byte 0x40-0x7e) is
+  /// captured in [_dcsCommand]; the rest is the data body in [_dcsPayload].
+  bool _consumeDcs() {
+    _dcsPayload.clear();
+    _dcsCommand = '';
+    var inCommand = true;
+    while (true) {
+      if (_queue.isEmpty) return false;
+      final char = _queue.consume();
+      if (char == Ascii.BEL) return true;
+      if (char == Ascii.ESC) {
+        if (_queue.isEmpty) return true;
+        _queue.consume(); // backslash of ST
+        return true;
+      }
+      if (inCommand) {
+        if (char >= 0x20 && char <= 0x3f) {
+          _dcsCommand += String.fromCharCode(char);
+        } else if (char >= 0x40 && char <= 0x7e) {
+          _dcsCommand += String.fromCharCode(char);
+          inCommand = false; // final byte — data follows
+        } else {
+          inCommand = false;
+          _dcsPayload.writeCharCode(char);
+        }
+      } else {
+        _dcsPayload.writeCharCode(char);
+      }
     }
   }
 }
