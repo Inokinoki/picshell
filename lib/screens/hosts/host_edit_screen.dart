@@ -327,8 +327,8 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
   }
 
   /// Editor for a single [ForwardRule]. Returns null if the user cancels.
-  /// Only local/remote types are offered: SOCKS5 needs dartssh2 >= 2.17
-  /// (held back by pointycastle) and is intentionally hidden from creation.
+  /// All three types (local, remote, SOCKS) are offered; SOCKS needs only a
+  /// local port.
   Future<ForwardRule?> _showForwardEditor({ForwardRule? existing}) {
     return showDialog<ForwardRule>(
       context: context,
@@ -395,8 +395,8 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
 }
 
 /// Dialog for creating or editing a [ForwardRule]. Local and remote types
-/// share the same fields (localPort + remoteHost:remotePort); SOCKS is hidden
-/// because the runtime cannot start it on the current dartssh2 version.
+/// share the same fields (localPort + remoteHost:remotePort); SOCKS only needs
+/// a local port (it is a dynamic proxy, the destination is chosen per request).
 class _ForwardEditorDialog extends StatefulWidget {
   final ForwardRule? existing;
   const _ForwardEditorDialog({this.existing});
@@ -412,6 +412,11 @@ class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
   final _remotePortController = TextEditingController();
   ForwardType _type = ForwardType.local;
   bool _autoStart = true;
+
+  /// Local and remote forwards need a remote target; SOCKS does not (the
+  /// destination is chosen by the SOCKS client at connect time).
+  bool get _needsRemote =>
+      _type == ForwardType.local || _type == ForwardType.remote;
 
   @override
   void initState() {
@@ -447,6 +452,10 @@ class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
                   value: ForwardType.remote,
                   child: Text('Remote (ssh -R)'),
                 ),
+                DropdownMenuItem(
+                  value: ForwardType.socks,
+                  child: Text('SOCKS  (ssh -D)'),
+                ),
               ],
               onChanged: (v) => setState(() => _type = v ?? ForwardType.local),
             ),
@@ -460,25 +469,27 @@ class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
               keyboardType: TextInputType.number,
               validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
             ),
-            TextFormField(
-              controller: _remoteHostController,
-              decoration: InputDecoration(
-                labelText: _type == ForwardType.remote
-                    ? 'Dial-back host (local side)'
-                    : 'Remote host',
+            if (_needsRemote) ...[
+              TextFormField(
+                controller: _remoteHostController,
+                decoration: InputDecoration(
+                  labelText: _type == ForwardType.remote
+                      ? 'Dial-back host (local side)'
+                      : 'Remote host',
+                ),
+                validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
               ),
-              validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
-            ),
-            TextFormField(
-              controller: _remotePortController,
-              decoration: InputDecoration(
-                labelText: _type == ForwardType.remote
-                    ? 'Dial-back port (local side)'
-                    : 'Remote port',
+              TextFormField(
+                controller: _remotePortController,
+                decoration: InputDecoration(
+                  labelText: _type == ForwardType.remote
+                      ? 'Dial-back port (local side)'
+                      : 'Remote port',
+                ),
+                keyboardType: TextInputType.number,
+                validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
               ),
-              keyboardType: TextInputType.number,
-              validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
-            ),
+            ],
             SwitchListTile(
               title: const Text('Auto-start when connected'),
               value: _autoStart,
@@ -505,13 +516,16 @@ class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
     final localPort = int.tryParse(_localPortController.text);
-    final remotePort = int.tryParse(_remotePortController.text);
-    if (localPort == null || remotePort == null) return;
+    if (localPort == null) return;
+    // SOCKS has no fixed remote endpoint; local/remote forwards need one.
+    final remotePort =
+        _needsRemote ? int.tryParse(_remotePortController.text) : null;
+    if (_needsRemote && remotePort == null) return;
     final rule = ForwardRule(
       id: widget.existing?.id ?? _uuid.v4(),
       type: _type,
       localPort: localPort,
-      remoteHost: _remoteHostController.text,
+      remoteHost: _needsRemote ? _remoteHostController.text : null,
       remotePort: remotePort,
       autoStart: _autoStart,
     );
