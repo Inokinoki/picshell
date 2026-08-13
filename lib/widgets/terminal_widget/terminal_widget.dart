@@ -65,6 +65,17 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
 
     final settings = ref.watch(settingsProvider);
 
+    // Theme/style are TerminalView params and hot-swap via updateRenderObject
+    // (no Terminal re-creation). An empty fontFamily falls back to xterm's
+    // platform default ('monospace' + its CJK/emoji fallback chain).
+    final textStyle = settings.fontFamily.isEmpty
+        ? TerminalStyle(fontSize: settings.fontSize, height: settings.lineHeight)
+        : TerminalStyle(
+            fontFamily: settings.fontFamily,
+            fontSize: settings.fontSize,
+            height: settings.lineHeight,
+          );
+
     bool showKeyboard;
     switch (settings.keyboardBarMode) {
       case KeyboardBarMode.auto:
@@ -85,6 +96,8 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
             widget.terminal,
             controller: _terminalController,
             focusNode: _focusNode,
+            theme: settings.palette.theme,
+            textStyle: textStyle,
           ),
         ),
         if (showKeyboard)

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/settings_provider.dart';
+import 'appearance_section.dart';
+import 'widgets/section_header.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -13,7 +15,7 @@ class SettingsScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         children: [
-          const _SectionHeader(title: 'Theme'),
+          const SectionHeader(title: 'Theme'),
           _buildThemeModeTile(
             context,
             ref,
@@ -42,7 +44,10 @@ class SettingsScreen extends ConsumerWidget {
             settings.themeMode,
           ),
           const Divider(),
-          const _SectionHeader(title: 'Virtual Keyboard'),
+          const SectionHeader(title: '终端外观'),
+          const AppearanceSection(),
+          const Divider(),
+          const SectionHeader(title: 'Virtual Keyboard'),
           _buildKeyboardModeTile(
             context,
             ref,
@@ -118,27 +123,6 @@ class SettingsScreen extends ConsumerWidget {
       onTap: () {
         ref.read(settingsProvider.notifier).setKeyboardBarMode(mode);
       },
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  final String title;
-
-  const _SectionHeader({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(
-        title,
-        style: TextStyle(
-          color: Colors.tealAccent,
-          fontSize: 14,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
     );
   }
 }

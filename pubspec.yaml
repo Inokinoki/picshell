@@ -61,9 +61,19 @@ dev_dependencies:
 flutter:
 
   # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
+  # included with the application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Bundled monospace font offered in the terminal appearance settings.
+  # Licensed under the SIL Open Font License 1.1 (see
+  # assets/fonts/JetBrainsMono-OFL.txt).
+  fonts:
+    - family: JetBrains Mono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+        - asset: assets/fonts/JetBrainsMono-Bold.ttf
+          weight: 700
 
   # To add assets to your application, add an assets section, like this:
   # assets:
