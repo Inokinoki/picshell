@@ -6,7 +6,8 @@ void main() {
   group('TerminalSearch', () {
     test('finds substring matches across lines with column offsets', () {
       final terminal = Terminal(maxLines: 1000);
-      terminal.write('foo bar\nbaz foo\n');
+      // CR+LF so each line starts at column 0 (plain LF keeps the column).
+      terminal.write('foo bar\r\nbaz foo\r\n');
       final search = TerminalSearch(terminal);
 
       final result = search.find('foo');
@@ -68,6 +69,28 @@ void main() {
       final result = TerminalSearch(terminal).find('x');
       expect(result.matches.length, lessThanOrEqualTo(TerminalSearch.maxMatches));
       expect(result.truncated, isTrue);
+    });
+
+    test('wide glyphs map to cell columns, not character offsets', () {
+      // 你 is East-Asian Wide → occupies 2 cells; 'foo' then starts at cell 2,
+      // not character offset 1.
+      final terminal = Terminal(maxLines: 1000);
+      terminal.write('你foo\n');
+      final result = TerminalSearch(terminal).find('foo');
+      expect(result.matches.length, 1);
+      expect(result.matches[0].colStart, 2, reason: 'cell column after a wide glyph');
+      expect(result.matches[0].colEnd, 5);
+    });
+
+    test('invalid regex returns an empty result instead of throwing', () {
+      final terminal = Terminal(maxLines: 1000);
+      terminal.write('hello\n');
+      expect(
+        () => TerminalSearch(terminal).find('(', regex: true),
+        returnsNormally,
+      );
+      expect(TerminalSearch(terminal).find('(', regex: true).matches, isEmpty);
+      expect(TerminalSearch(terminal).find('[a-', regex: true).matches, isEmpty);
     });
   });
 }

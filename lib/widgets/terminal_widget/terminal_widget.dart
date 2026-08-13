@@ -67,16 +67,41 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
       return KeyEventResult.ignored;
     });
     _search = TerminalSearch(widget.terminal);
+    // Refresh the search while the bar is open so results stay correct as new
+    // output shifts line indices (CellAnchors track content, but our stored
+    // lineIndex snapshots go stale once scrollback wraps).
+    widget.terminal.addListener(_onTerminalChanged);
+  }
+
+  void _onTerminalChanged() {
+    if (!_searchVisible || _query.isEmpty) return;
+    _scheduleSearch();
+  }
+
+  /// Disposes every highlight AND the two CellAnchors it owns. CellAnchors are
+  /// NOT owned by TerminalHighlight, so disposing only the highlight leaks them
+  /// (they accumulate in BufferLine._anchors and slow every text mutation).
+  void _disposeHighlights() {
+    for (final h in _highlights) {
+      h.p1.dispose();
+      h.p2.dispose();
+      h.dispose();
+    }
+    _highlights = [];
+  }
+
+  void _scheduleSearch() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 150), _runSearch);
   }
 
   @override
   void dispose() {
+    widget.terminal.removeListener(_onTerminalChanged);
     WidgetsBinding.instance.removeObserver(this);
     _keyboardSubscription.cancel();
     _debounce?.cancel();
-    for (final h in _highlights) {
-      h.dispose();
-    }
+    _disposeHighlights();
     _terminalController.dispose();
     _focusNode.dispose();
     _scrollController.dispose();
@@ -121,24 +146,20 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
 
   void _closeSearch() {
     _debounce?.cancel();
-    for (final h in _highlights) {
-      h.dispose();
-    }
+    _disposeHighlights();
     setState(() {
       _searchVisible = false;
       _query = '';
       _searchFieldController.clear();
       _result = const SearchResult(matches: [], truncated: false);
       _current = -1;
-      _highlights = [];
     });
     _focusNode.requestFocus();
   }
 
   void _onQueryChanged(String value) {
     _query = value;
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 150), _runSearch);
+    _scheduleSearch();
   }
 
   void _runSearch() {
@@ -156,10 +177,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
   /// current match). Called when the result set or current index changes; cheap
   /// enough at the [TerminalSearch.maxMatches] cap for a user-initiated action.
   void _applyHighlights() {
-    for (final h in _highlights) {
-      h.dispose();
-    }
-    _highlights = [];
+    _disposeHighlights();
     final buffer = widget.terminal.buffer;
     final bg = TerminalThemes.defaultTheme.searchHitBackground;
     final bgCur = TerminalThemes.defaultTheme.searchHitBackgroundCurrent;

@@ -93,5 +93,43 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('1/3'), findsOneWidget);
     });
+
+    testWidgets('CellAnchors are disposed when results change (no leak)',
+        (tester) async {
+      final terminal = Terminal(maxLines: 1000);
+      terminal.write('foo\r\nfoo\r\nfoo\r\n');
+
+      int totalAnchors() {
+        var n = 0;
+        final b = terminal.buffer;
+        for (var y = 0; y < b.height; y++) {
+          n += b.lines[y].anchors.length;
+        }
+        return n;
+      }
+
+      await tester.pumpWidget(_wrap(terminal));
+      await tester.pump();
+      await tester.tap(find.byType(TerminalView));
+      await tester.pumpAndSettle();
+      await _sendCtrlF(tester);
+
+      // First search: 3 matches → 6 anchors (2 per match). Pump past the
+      // 150 ms debounce (pumpAndSettle doesn't guarantee advancing the clock
+      // far enough to fire the Timer).
+      await tester.enterText(find.byType(TextField), 'foo');
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(totalAnchors(), 6);
+
+      // A second search with no matches must dispose the old anchors,
+      // not accumulate them.
+      await tester.enterText(find.byType(TextField), 'zzz');
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(totalAnchors(), 0);
+    });
   });
 }
