@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 import 'package:picshell/models/terminal_palette.dart';
@@ -82,5 +83,23 @@ void main() {
     expect(changed.fontFamily, 'Menlo');
     expect(changed.fontSize, 20);
     expect(changed.lineHeight, 1.5);
+  });
+
+  test('corrupted out-of-range enum index falls back instead of throwing',
+      () async {
+    // Simulate a corrupted / future-versioned palette index.
+    final box = await Hive.openBox('settings');
+    await box.put('palette', 9999);
+    await box.put('themeMode', -1);
+
+    final n = SettingsNotifier(loadFromStorage: true);
+    await _waitFor(() => !identical(n.state, const AppSettings()) ||
+        n.state.palette == TerminalPalette.values.last);
+
+    // Clamped to the last / first valid values — no RangeError.
+    expect(
+        n.state.palette, TerminalPalette.values.last, reason: 'palette clamp');
+    expect(n.state.themeMode, ThemeMode.values.first,
+        reason: 'themeMode clamp');
   });
 }

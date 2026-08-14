@@ -80,7 +80,9 @@ class AppearanceSection extends ConsumerWidget {
             divisions: 20,
             value: settings.fontSize.clamp(8.0, 28.0),
             label: settings.fontSize.toStringAsFixed(0),
-            onChanged: notifier.setFontSize,
+            // Live preview per tick; persist once when the drag ends.
+            onChanged: notifier.previewFontSize,
+            onChangeEnd: notifier.setFontSize,
           ),
           trailing: Text(settings.fontSize.toStringAsFixed(0)),
         ),
@@ -93,7 +95,9 @@ class AppearanceSection extends ConsumerWidget {
             divisions: 20,
             value: settings.lineHeight.clamp(1.0, 2.0),
             label: settings.lineHeight.toStringAsFixed(2),
-            onChanged: notifier.setLineHeight,
+            // Live preview per tick; persist once when the drag ends.
+            onChanged: notifier.previewLineHeight,
+            onChangeEnd: notifier.setLineHeight,
           ),
           trailing: Text(settings.lineHeight.toStringAsFixed(2)),
         ),

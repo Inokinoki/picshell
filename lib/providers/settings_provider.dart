@@ -70,14 +70,17 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
 
   Future<void> _load() async {
     final box = await Hive.openBox(_boxName);
-    final keyboardIndex = box.get(_keyboardModeKey, defaultValue: 0);
-    final themeIndex = box.get(_themeModeKey, defaultValue: 0);
-    final paletteIndex = box.get(_paletteKey, defaultValue: 0);
-    final storedPalette = TerminalPalette.values[paletteIndex];
+    // Clamp enum indices: a corrupted or future-versioned box value would
+    // otherwise throw RangeError out of this fire-and-forget _load.
+    T _enum<T extends Enum>(String key, List<T> values) {
+      final index = box.get(key, defaultValue: 0) as int;
+      return values[index.clamp(0, values.length - 1)];
+    }
+
     state = AppSettings(
-      keyboardBarMode: KeyboardBarMode.values[keyboardIndex],
-      themeMode: ThemeMode.values[themeIndex],
-      palette: storedPalette,
+      keyboardBarMode: _enum(_keyboardModeKey, KeyboardBarMode.values),
+      themeMode: _enum(_themeModeKey, ThemeMode.values),
+      palette: _enum(_paletteKey, TerminalPalette.values),
       fontFamily: box.get(_fontFamilyKey, defaultValue: defaultFontFamily),
       fontSize: box.get(_fontSizeKey, defaultValue: defaultFontSize),
       lineHeight: box.get(_lineHeightKey, defaultValue: defaultLineHeight),
@@ -114,9 +117,20 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     await box.put(_fontSizeKey, fontSize);
   }
 
+  /// Live-drag preview: updates state (so the UI follows the thumb) without
+  /// hitting Hive on every tick. [setFontSize] persists on drag end.
+  void previewFontSize(double fontSize) {
+    state = state.copyWith(fontSize: fontSize);
+  }
+
   Future<void> setLineHeight(double lineHeight) async {
     state = state.copyWith(lineHeight: lineHeight);
     final box = await Hive.openBox(_boxName);
     await box.put(_lineHeightKey, lineHeight);
+  }
+
+  /// Live-drag preview for line height — see [previewFontSize].
+  void previewLineHeight(double lineHeight) {
+    state = state.copyWith(lineHeight: lineHeight);
   }
 }

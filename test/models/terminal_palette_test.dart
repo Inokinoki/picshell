@@ -55,5 +55,23 @@ void main() {
         expect(palette.previewForeground, palette.theme.foreground);
       }
     });
+
+    test('named palettes pin canonical background values', () {
+      // Guards against copy-paste hex typos (e.g. Gruvbox once shipped
+      // 0xFF282822 instead of morhetz's dark0 #282828).
+      final pinned = <TerminalPalette, int>{
+        TerminalPalette.defaultTheme: 0xFF1E1E1E,
+        TerminalPalette.solarizedDark: 0xFF002B36,
+        TerminalPalette.solarizedLight: 0xFFFDF6E3,
+        TerminalPalette.dracula: 0xFF282A36,
+        TerminalPalette.nord: 0xFF2E3440,
+        TerminalPalette.monokai: 0xFF272822,
+        TerminalPalette.gruvboxDark: 0xFF282828,
+      };
+      pinned.forEach((palette, value) {
+        expect(palette.theme.background.toARGB32(), value,
+            reason: palette.name);
+      });
+    });
   });
 }
