@@ -10,6 +10,9 @@ import 'package:xterm/src/core/buffer/line.dart';
 import 'package:xterm/src/core/cursor.dart';
 import 'package:xterm/src/core/escape/emitter.dart';
 import 'package:xterm/src/core/escape/handler.dart';
+import 'package:xterm/src/graphics/kitty.dart';
+import 'package:xterm/src/graphics/png_encoder.dart';
+import 'package:xterm/src/graphics/sixel.dart';
 import 'package:xterm/src/core/escape/parser.dart';
 import 'package:xterm/src/core/input/handler.dart';
 import 'package:xterm/src/core/input/keys.dart';
@@ -152,6 +155,24 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     bool inline,
     bool preserveAspectRatio,
   })? onImageDecoded;
+
+  /// Decodes Kitty graphics-protocol APC payloads into [onImageDecoded].
+  /// Lazily built so it picks up whatever callback the app installs.
+  KittyGraphicsHandler? _kitty;
+  KittyGraphicsHandler get _kittyHandler {
+    return _kitty ??= KittyGraphicsHandler(
+      onImage: (bytes, imageId, width, height) {
+        onImageDecoded?.call(
+          bytes,
+          imageId == null ? 'kitty' : 'kitty-$imageId',
+          width,
+          height,
+          inline: true,
+          preserveAspectRatio: true,
+        );
+      },
+    );
+  }
 
   /* TerminalState */
 
@@ -957,6 +978,53 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     } else {
       onPrivateOSC?.call(ps, pt);
     }
+  }
+
+  @override
+  void apc(String data) {
+    // Kitty graphics protocol: `ESC _ G ... ST`. The captured [data] begins
+    // with the `G` command byte. Other APC commands are ignored.
+    if (data.startsWith('G')) {
+      _kittyHandler.handle(data);
+    }
+  }
+
+  @override
+  void dcs(String intermediates, String data) {
+    // Device Control String — Sixel graphics: the final byte is `q`.
+    // `intermediates` is the leading command prefix (params + `q`), e.g.
+    // `0;0;0q` or `q`; `data` is the sixel body. Reject anything with an
+    // intermediate byte before `q` (e.g. `$q` = DECRQSS), whose text body
+    // would otherwise rasterise into a phantom image.
+    if (!_isSixelPrefix(intermediates)) return;
+    try {
+      final image = SixelDecoder().decode(data);
+      if (image != null) {
+        final png = pngEncode(image.rgba, image.width, image.height);
+        onImageDecoded?.call(
+          png,
+          'sixel',
+          image.width,
+          image.height,
+          inline: true,
+          preserveAspectRatio: true,
+        );
+      }
+    } catch (_) {
+      // A pathological Sixel/PNG input must never escape terminal.write() and
+      // kill the session — drop the image instead.
+    }
+  }
+
+  /// True iff [prefix] is a Sixel command: optional params (bytes 0x30-0x3f)
+  /// followed by the `q` final byte, with no intermediate bytes (0x20-0x2f).
+  bool _isSixelPrefix(String prefix) {
+    if (!prefix.endsWith('q')) return false;
+    for (var i = 0; i < prefix.length - 1; i++) {
+      final c = prefix.codeUnitAt(i);
+      if (c < 0x30 || c > 0x3f) return false;
+    }
+    return true;
   }
 
   /// Single-sequence iTerm2 image: `File=params:base64`. The params and the
