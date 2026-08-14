@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
 
@@ -24,12 +26,6 @@ abstract class ActiveForward {
 
   /// Builds the appropriate forward for [rule] on [client]. Throws if [client]
   /// is not yet authenticated or the requested port is already in use.
-  ///
-  /// [ForwardType.socks] currently throws [UnsupportedError]: it needs
-  /// `dartssh2 >= 2.17` (`forwardDynamic`), which is held back by picshell's
-  /// `pointycastle ^3.9.0` constraint. The enum value is kept so config imports
-  /// can still record `DynamicForward` rules; they become usable once the
-  /// pointycastle upgrade lands.
   static Future<ActiveForward> bind(SSHClient client, ForwardRule rule) {
     switch (rule.type) {
       case ForwardType.local:
@@ -37,11 +33,7 @@ abstract class ActiveForward {
       case ForwardType.remote:
         return _RemoteForward.bind(client, rule);
       case ForwardType.socks:
-        throw UnsupportedError(
-          'SOCKS5 dynamic forward (ssh -D) requires dartssh2 >= 2.17, which is '
-          'currently held back by pointycastle ^3.9.0. The rule is preserved '
-          'and will work once the dependency upgrade lands.',
-        );
+        return _DynamicForward.bind(client, rule);
     }
   }
 }
@@ -146,4 +138,202 @@ class _RemoteForward extends ActiveForward {
     // cancelForwardRemote internally without awaiting.
     _forward.close();
   }
+}
+
+/// Dynamic SOCKS5 forward (`ssh -D`). Binds a [ServerSocket] on the client
+/// that speaks the SOCKS5 protocol (NO AUTH + CONNECT only); for each request
+/// it opens a `direct-tcpip` channel via [SSHClient.forwardLocal] and pipes the
+/// data through. Implemented by hand rather than via dartssh2's `forwardDynamic`
+/// to avoid the pointycastle 4.x upgrade that API requires.
+class _DynamicForward extends ActiveForward {
+  final ServerSocket _server;
+  final Set<_SocksConn> _conns = {};
+
+  _DynamicForward._(this._server, String ruleId)
+      : super(ruleId, ForwardType.socks, _server.port);
+
+  static Future<_DynamicForward> bind(SSHClient client, ForwardRule rule) async {
+    final server = await ServerSocket.bind(rule.localHost, rule.localPort);
+    final fwd = _DynamicForward._(server, rule.id);
+    server.listen(
+      (socket) {
+        final conn = _SocksConn(socket);
+        fwd._conns.add(conn);
+        conn.done.whenComplete(() => fwd._conns.remove(conn));
+        unawaited(conn.negotiate(client));
+      },
+      onError: (_) {},
+    );
+    return fwd;
+  }
+
+  @override
+  Future<void> stop() async {
+    await _server.close();
+    for (final c in List.of(_conns)) {
+      c.close();
+    }
+  }
+}
+
+/// One SOCKS5 client connection. Owns the socket's single subscription, so it
+/// serves dual duty: [negotiate] reads the handshake from a buffered stream,
+/// then the same subscription forwards payload bytes to the SSH channel once
+/// attached (no second listener on the socket).
+class _SocksConn {
+  final Socket socket;
+  final List<int> _buf = [];
+  Completer<void>? _fill;
+  bool _closed = false;
+  late final StreamSubscription<Uint8List> _sub;
+  SSHForwardChannel? _channel;
+  final Completer<void> _done = Completer<void>();
+
+  _SocksConn(this.socket) {
+    _sub = socket.cast<Uint8List>().listen(
+      (Uint8List data) {
+        if (_channel != null) {
+          // Piping mode: forward straight to the remote channel.
+          _channel!.sink.add(data);
+        } else {
+          _buf.addAll(data);
+          _fill?.complete();
+          _fill = null;
+        }
+      },
+      onError: (_) => close(),
+      onDone: () => close(),
+    );
+  }
+
+  /// Resolves when the connection is fully torn down.
+  Future<void> get done => _done.future;
+
+  /// Reads exactly [n] bytes, awaiting more socket data as needed. Throws if
+  /// the peer closes before enough bytes arrive.
+  Future<Uint8List> read(int n) async {
+    while (_buf.length < n) {
+      if (_closed) {
+        throw const SocketException('SOCKS peer closed during handshake');
+      }
+      _fill = Completer<void>();
+      await _fill!.future;
+      _fill = null;
+    }
+    final out = Uint8List.fromList(_buf.sublist(0, n));
+    _buf.removeRange(0, n);
+    return out;
+  }
+
+  /// Runs the SOCKS5 method-selection + CONNECT handshake, then opens a
+  /// direct-tcpip channel and switches this connection into piping mode.
+  Future<void> negotiate(SSHClient client) async {
+    try {
+      // 1. Method selection: VER NMETHODS METHODS...
+      final ver = await read(1);
+      if (ver[0] != 0x05) {
+        throw const _SocksError('not SOCKS5');
+      }
+      final nMethods = (await read(1))[0];
+      final methods = await read(nMethods);
+      if (!methods.contains(0x00)) {
+        // No acceptable methods — we only support NO AUTH (0x00). The method
+        // selection reply is exactly 2 bytes: VER METHOD.
+        socket.add(Uint8List.fromList([0x05, 0xFF]));
+        throw const _SocksError('no acceptable auth method');
+      }
+      // Select NO AUTH. The method-selection reply is 2 bytes (VER METHOD),
+      // distinct from the 10-byte command reply [_socksReply].
+      socket.add(Uint8List.fromList([0x05, 0x00]));
+
+      // 2. Request: VER CMD RSV ATYP DST.ADDR DST.PORT
+      final req = await read(4);
+      if (req[0] != 0x05) {
+        throw const _SocksError('bad request version');
+      }
+      if (req[1] != 0x01) {
+        // Only CONNECT (0x01) is supported.
+        socket.add(_socksReply(0x07)); // command not supported
+        throw const _SocksError('only CONNECT supported');
+      }
+      final atyp = req[3];
+      final String host;
+      switch (atyp) {
+        case 0x01: // IPv4
+          final a = await read(4);
+          host = '${a[0]}.${a[1]}.${a[2]}.${a[3]}';
+        case 0x03: // domain
+          final len = (await read(1))[0];
+          host = utf8.decode(await read(len));
+        case 0x04: // IPv6 — format 16 bytes as colon-separated hex groups.
+          final a = await read(16);
+          final groups = <String>[];
+          for (var i = 0; i < 16; i += 2) {
+            groups.add(((a[i] << 8) | a[i + 1]).toRadixString(16));
+          }
+          host = groups.join(':');
+        default:
+          socket.add(_socksReply(0x08)); // address type not supported
+          throw const _SocksError('unsupported address type');
+      }
+      final pb = await read(2);
+      final port = (pb[0] << 8) | pb[1];
+
+      // 3. Open the direct-tcpip channel and report success/failure.
+      final SSHForwardChannel channel;
+      try {
+        channel = await client.forwardLocal(host, port);
+      } catch (_) {
+        // Distinguish nothing further — remote host unreachable / refused.
+        socket.add(_socksReply(0x04)); // host unreachable
+        rethrow;
+      }
+      socket.add(_socksReply(0x00)); // succeeded
+      _attach(channel);
+    } catch (_) {
+      close();
+    }
+  }
+
+  /// Switches to piping mode: future socket bytes go to [channel], channel
+  /// bytes go to the socket, leftover handshake buffer is flushed first.
+  /// Synchronous (no await) so it is atomic w.r.t. the event loop.
+  void _attach(SSHForwardChannel channel) {
+    _channel = channel;
+    if (_buf.isNotEmpty) {
+      channel.sink.add(Uint8List.fromList(_buf));
+      _buf.clear();
+    }
+    channel.stream.listen(
+      (Uint8List data) {
+        if (!_closed) socket.add(data);
+      },
+      onError: (_) => close(),
+      onDone: close,
+    );
+  }
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _fill?.complete();
+    _fill = null;
+    _sub.cancel();
+    _channel?.close();
+    socket.destroy();
+    if (!_done.isCompleted) _done.complete();
+  }
+}
+
+/// A SOCKS5 reply: VER(5) REP RSV ATYP(1=IPv4) BND.ADDR(0.0.0.0) BND.PORT(0).
+/// The bound address/port are reported as zeroes because picshell does not
+/// expose the actual local bind to the SOCKS client.
+Uint8List _socksReply(int rep) =>
+    Uint8List.fromList([0x05, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
+
+class _SocksError implements Exception {
+  final String message;
+  const _SocksError(this.message);
+  @override
+  String toString() => '_SocksError: $message';
 }
