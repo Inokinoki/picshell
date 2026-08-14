@@ -19,7 +19,17 @@ Widget _wrap(Terminal terminal) {
   );
 }
 
-/// Sends Ctrl+F to whatever currently has primary focus.
+/// Sends Ctrl+Shift+F to whatever currently has primary focus.
+Future<void> _sendCtrlShiftF(WidgetTester tester) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pumpAndSettle();
+}
+
+/// Sends bare Ctrl+F (no shift) to whatever currently has primary focus.
 Future<void> _sendCtrlF(WidgetTester tester) async {
   await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
   await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
@@ -29,7 +39,7 @@ Future<void> _sendCtrlF(WidgetTester tester) async {
 
 void main() {
   group('TerminalWidget search', () {
-    testWidgets('Ctrl+F opens the search bar and Esc closes it',
+    testWidgets('Ctrl+Shift+F opens the search bar and Esc closes it',
         (tester) async {
       final terminal = Terminal(maxLines: 1000);
       terminal.write('hello world\nfoo bar\n');
@@ -40,18 +50,37 @@ void main() {
       // Search bar not visible initially.
       expect(find.byTooltip('Close (Esc)'), findsNothing);
 
-      // Focus the terminal so it receives the key event, then Ctrl+F.
+      // Focus the terminal so it receives the key event, then Ctrl+Shift+F.
       await tester.tap(find.byType(TerminalView));
       await tester.pumpAndSettle();
-      await _sendCtrlF(tester);
+      await _sendCtrlShiftF(tester);
 
       expect(find.byTooltip('Close (Esc)'), findsOneWidget);
-      expect(find.text('Search (Ctrl+F)'), findsOneWidget);
+      expect(find.text('Search (Ctrl+Shift+F)'), findsOneWidget);
 
       // Esc closes it.
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(find.byTooltip('Close (Esc)'), findsNothing);
+    });
+
+    testWidgets('bare Ctrl+F is not intercepted by the search UI',
+        (tester) async {
+      final terminal = Terminal(maxLines: 1000);
+      terminal.write('hello world\nfoo bar\n');
+
+      await tester.pumpWidget(_wrap(terminal));
+      await tester.pump();
+      await tester.tap(find.byType(TerminalView));
+      await tester.pumpAndSettle();
+
+      await _sendCtrlF(tester);
+      // The search bar must NOT open: Ctrl+F must reach the shell
+      // (readline forward-char, emacs, TUIs).
+      expect(find.byTooltip('Close (Esc)'), findsNothing);
+      // Let any timer the terminal input handler scheduled fire.
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
     });
 
     testWidgets('typing a query reports match count', (tester) async {
@@ -62,7 +91,7 @@ void main() {
       await tester.pump();
       await tester.tap(find.byType(TerminalView));
       await tester.pumpAndSettle();
-      await _sendCtrlF(tester);
+      await _sendCtrlShiftF(tester);
 
       await tester.enterText(find.byType(TextField), 'foo');
       await tester.pumpAndSettle();
@@ -79,7 +108,7 @@ void main() {
       await tester.pump();
       await tester.tap(find.byType(TerminalView));
       await tester.pumpAndSettle();
-      await _sendCtrlF(tester);
+      await _sendCtrlShiftF(tester);
 
       await tester.enterText(find.byType(TextField), 'foo');
       await tester.pumpAndSettle();
@@ -92,6 +121,34 @@ void main() {
       await tester.tap(find.byTooltip('Previous match'));
       await tester.pumpAndSettle();
       expect(find.text('1/3'), findsOneWidget);
+    });
+
+    testWidgets('streaming output preserves the current match',
+        (tester) async {
+      final terminal = Terminal(maxLines: 1000);
+      terminal.write('foo\nfoo\nfoo\n');
+
+      await tester.pumpWidget(_wrap(terminal));
+      await tester.pump();
+      await tester.tap(find.byType(TerminalView));
+      await tester.pumpAndSettle();
+      await _sendCtrlShiftF(tester);
+
+      await tester.enterText(find.byType(TextField), 'foo');
+      await tester.pumpAndSettle();
+      expect(find.text('1/3'), findsOneWidget);
+
+      // Navigate to match 2/3.
+      await tester.tap(find.byTooltip('Next match'));
+      await tester.pumpAndSettle();
+      expect(find.text('2/3'), findsOneWidget);
+
+      // Streaming output triggers the debounced re-search; the current match
+      // must be preserved, not reset to 1/3.
+      terminal.write('bar\r\n');
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(find.text('2/3'), findsOneWidget);
     });
 
     testWidgets('CellAnchors are disposed when results change (no leak)',
@@ -112,7 +169,7 @@ void main() {
       await tester.pump();
       await tester.tap(find.byType(TerminalView));
       await tester.pumpAndSettle();
-      await _sendCtrlF(tester);
+      await _sendCtrlShiftF(tester);
 
       // First search: 3 matches → 6 anchors (2 per match). Pump past the
       // 150 ms debounce (pumpAndSettle doesn't guarantee advancing the clock
