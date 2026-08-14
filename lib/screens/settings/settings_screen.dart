@@ -44,7 +44,7 @@ class SettingsScreen extends ConsumerWidget {
             settings.themeMode,
           ),
           const Divider(),
-          const SectionHeader(title: '终端外观'),
+          const SectionHeader(title: 'Terminal Appearance'),
           const AppearanceSection(),
           const Divider(),
           const SectionHeader(title: 'Virtual Keyboard'),

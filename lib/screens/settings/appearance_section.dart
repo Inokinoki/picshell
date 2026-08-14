@@ -9,7 +9,7 @@ import '../../providers/settings_provider.dart';
 /// pick degrades gracefully rather than crashing. 'JetBrains Mono' resolves
 /// only when bundled via pubspec (see assets/fonts).
 const _fontOptions = <(String, String)>[
-  ('系统默认', defaultFontFamily),
+  ('System default', defaultFontFamily),
   ('JetBrains Mono', 'JetBrains Mono'),
   ('Menlo', 'Menlo'),
   ('Monaco', 'Monaco'),
@@ -35,7 +35,7 @@ class AppearanceSection extends ConsumerWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16.0),
           child: Text(
-            '配色方案',
+            'Colour Scheme',
             style: Theme.of(context).textTheme.titleSmall,
           ),
         ),
@@ -56,7 +56,7 @@ class AppearanceSection extends ConsumerWidget {
         ),
         ListTile(
           leading: const Icon(Icons.font_download),
-          title: const Text('字体'),
+          title: const Text('Font'),
           trailing: DropdownButton<String>(
             value: _fontOptions
                 .any((e) => e.$2 == settings.fontFamily)
@@ -73,7 +73,7 @@ class AppearanceSection extends ConsumerWidget {
         ),
         ListTile(
           leading: const Icon(Icons.format_size),
-          title: const Text('字号'),
+          title: const Text('Font Size'),
           subtitle: Slider(
             min: 8,
             max: 28,
@@ -88,7 +88,7 @@ class AppearanceSection extends ConsumerWidget {
         ),
         ListTile(
           leading: const Icon(Icons.format_line_spacing),
-          title: const Text('行高'),
+          title: const Text('Line Height'),
           subtitle: Slider(
             min: 1.0,
             max: 2.0,
@@ -106,8 +106,8 @@ class AppearanceSection extends ConsumerWidget {
         // it is a known gap rather than a missing feature.
         SwitchListTile(
           secondary: const Icon(Icons.extension),
-          title: const Text('连字 (开发中)'),
-          subtitle: const Text('Fira Code 等字体的编程连字，需重写渲染层'),
+          title: const Text('Ligatures (in development)'),
+          subtitle: const Text('Programming ligatures (Fira Code etc.) need a renderer rewrite'),
           value: false,
           onChanged: null,
         ),

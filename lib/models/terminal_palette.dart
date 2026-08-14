@@ -19,9 +19,9 @@ enum TerminalPalette {
   String get displayName {
     switch (this) {
       case TerminalPalette.defaultTheme:
-        return 'Picshell (默认)';
+        return 'Picshell (Default)';
       case TerminalPalette.whiteOnBlack:
-        return '白字黑底';
+        return 'White on Black';
       case TerminalPalette.solarizedDark:
         return 'Solarized Dark';
       case TerminalPalette.solarizedLight:
