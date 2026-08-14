@@ -111,4 +111,27 @@ void main() {
       expect(e.sizeLabel, '');
     });
   });
+
+  group('validateEntryName', () {
+    test('accepts plain names', () {
+      expect(validateEntryName('readme.txt'), isNull);
+      expect(validateEntryName('my folder'), isNull);
+      expect(validateEntryName('a.b.c'), isNull);
+      expect(validateEntryName('  padded  '), isNull);
+    });
+    test('rejects empty and whitespace-only', () {
+      expect(validateEntryName(''), isNotNull);
+      expect(validateEntryName('   '), isNotNull);
+    });
+    test('rejects dot entries', () {
+      expect(validateEntryName('.'), isNotNull);
+      expect(validateEntryName('..'), isNotNull);
+    });
+    test('rejects path separators (both styles)', () {
+      expect(validateEntryName('a/b'), isNotNull);
+      expect(validateEntryName('../evil'), isNotNull);
+      expect(validateEntryName('a\\b'), isNotNull);
+      expect(validateEntryName('/abs'), isNotNull);
+    });
+  });
 }

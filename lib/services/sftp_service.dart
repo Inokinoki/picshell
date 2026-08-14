@@ -56,10 +56,25 @@ String sftpErrorMessage(Object e) {
   return e.toString();
 }
 
+/// Validates a user-supplied file/folder name before it is joined into a
+/// remote path. Returns null when the name is safe, or a short user-facing
+/// error message describing why it was rejected. Pure top-level function for
+/// testability.
+String? validateEntryName(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return 'Name cannot be empty';
+  if (trimmed == '.' || trimmed == '..') {
+    return '"$trimmed" is not a valid name';
+  }
+  if (trimmed.contains('/') || trimmed.contains('\\')) {
+    return 'Name cannot contain "/" or "\\"';
+  }
+  return null;
+}
+
 String _trimSlashes(String s) => s.replaceAll(RegExp(r'^/+|/$'), '');
-String _trimTrailingSlash(String s) => s.endsWith('/') && s.length > 1
-    ? s.substring(0, s.length - 1)
-    : s;
+String _trimTrailingSlash(String s) =>
+    s.endsWith('/') && s.length > 1 ? s.substring(0, s.length - 1) : s;
 
 /// Wraps an [SshService] to provide SFTP file operations. Lazily opens an
 /// SFTP subsystem on first use and transparently reopens it after the SSH
@@ -73,19 +88,37 @@ class SftpService implements SftpBrowserBackend {
 
   SftpService(this._ssh);
 
+  // Memoised in-flight open so concurrent callers during (re)connect share a
+  // single SFTP subsystem instead of each opening (and leaking) one.
+  Future<SftpClient>? _opening;
+
   /// Returns a usable SftpClient, opening one if needed and reopening if the
   /// underlying SSH client has been replaced since last use.
-  Future<SftpClient> _client() async {
+  Future<SftpClient> _client() {
     final sshClient = _ssh.client;
     if (sshClient == null) {
       throw SftpError('SSH session is not connected');
     }
-    if (_sftp == null || _sftpOwner != sshClient) {
-      _sftp?.close();
-      _sftp = await sshClient.sftp();
-      _sftpOwner = sshClient;
+    if (_sftp != null && _sftpOwner == sshClient) {
+      return Future.value(_sftp);
     }
-    return _sftp!;
+    return _opening ??= () {
+      // The cached client belongs to a replaced SSH client; close it before
+      // opening a fresh subsystem on the current one.
+      _sftp?.close();
+      _sftp = null;
+      _sftpOwner = null;
+      return sshClient
+          .sftp()
+          .then((client) {
+            _sftp = client;
+            _sftpOwner = sshClient;
+            return client;
+          })
+          .whenComplete(() {
+            _opening = null;
+          });
+    }();
   }
 
   /// Lists [path], returning UI-friendly [SftpEntry]s sorted directories-first.
@@ -94,16 +127,18 @@ class SftpService implements SftpBrowserBackend {
     final names = await sftp.listdir(path);
     final entries = names
         .where((n) => n.filename != '.' && n.filename != '..')
-        .map((n) => SftpEntry(
-              name: n.filename,
-              isDirectory: n.attr.isDirectory,
-              size: n.attr.size,
-              modifyTime: n.attr.modifyTime == null
-                  ? null
-                  : DateTime.fromMillisecondsSinceEpoch(
-                      n.attr.modifyTime! * 1000,
-                    ),
-            ))
+        .map(
+          (n) => SftpEntry(
+            name: n.filename,
+            isDirectory: n.attr.isDirectory,
+            size: n.attr.size,
+            modifyTime: n.attr.modifyTime == null
+                ? null
+                : DateTime.fromMillisecondsSinceEpoch(
+                    n.attr.modifyTime! * 1000,
+                  ),
+          ),
+        )
         .toList();
     entries.sort((a, b) {
       if (a.isDirectory != b.isDirectory) return a.isDirectory ? -1 : 1;
@@ -132,9 +167,32 @@ class SftpService implements SftpBrowserBackend {
         sink.add(chunk);
       }
       await sink.flush();
+    } catch (_) {
+      // Don't leave a truncated file that looks like a successful download.
+      try {
+        await sink.close();
+      } finally {
+        try {
+          await File(localPath).delete();
+        } catch (_) {}
+      }
+      rethrow;
     } finally {
       await sink.close();
       await file.close();
+    }
+  }
+
+  /// Returns whether [path] exists on the remote, without throwing on
+  /// "no such file".
+  Future<bool> exists(String path) async {
+    final sftp = await _client();
+    try {
+      await sftp.stat(path);
+      return true;
+    } on SftpStatusError catch (e) {
+      if (e.code == SftpStatusCode.noSuchFile) return false;
+      rethrow;
     }
   }
 
@@ -149,27 +207,46 @@ class SftpService implements SftpBrowserBackend {
     final size = await localFile.length();
     final file = await sftp.open(
       remotePath,
-      mode: SftpFileOpenMode.write |
+      mode:
+          SftpFileOpenMode.write |
           SftpFileOpenMode.create |
           SftpFileOpenMode.truncate,
     );
     try {
-      // Stream the local file in 16KB chunks and translate to byte-progress.
-      const chunkSize = 16 * 1024;
       var sent = 0;
       final controller = StreamController<Uint8List>();
-      final writer = file.write(controller.stream, onProgress: (acked) {
-        // dartssh2 reports acknowledged bytes; report the min of acked/sent
-        // so we never show >100% during the final flush.
-        onProgress?.call(acked < sent ? acked : sent);
-      });
-      await for (final chunk in localFile.openRead(chunkSize, chunkSize)) {
-        controller.add(Uint8List.fromList(chunk));
-        sent += chunk.length;
+      final writer = file.write(
+        controller.stream,
+        onProgress: (acked) {
+          // dartssh2 reports acknowledged bytes; report the min of acked/sent
+          // so we never show >100% during the final flush.
+          onProgress?.call(acked < sent ? acked : sent);
+        },
+      );
+      try {
+        // openRead() with no range streams the whole file; dartssh2 emits
+        // chunks to the writer at its own pace (backpressure via the
+        // controller's buffer).
+        // dart:io delivers Uint8List chunks; the cast just re-types the
+        // stream without copying.
+        await for (final chunk in localFile.openRead().cast<Uint8List>()) {
+          controller.add(chunk);
+          sent += chunk.length;
+        }
+        await controller.close();
+        await writer;
+        onProgress?.call(size);
+      } catch (_) {
+        // Always unblock/terminate the writer side so it can't hang waiting
+        // for more data that will never arrive.
+        try {
+          await controller.close();
+        } catch (_) {}
+        try {
+          await writer;
+        } catch (_) {}
+        rethrow;
       }
-      await controller.close();
-      await writer;
-      onProgress?.call(size);
     } finally {
       await file.close();
     }

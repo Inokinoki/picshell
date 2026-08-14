@@ -22,4 +22,12 @@ abstract class SftpBrowserBackend {
   Future<void> rmdir(String path);
   Future<void> remove(String path);
   Future<void> rename(String oldPath, String newPath);
+
+  /// Whether [path] exists on the remote. Used to warn before overwriting
+  /// an existing file on upload.
+  Future<bool> exists(String path);
+
+  /// Releases underlying resources (e.g. the SFTP subsystem). The screen
+  /// calls this in dispose(). Default no-op so lightweight fakes needn't care.
+  Future<void> close() async {}
 }

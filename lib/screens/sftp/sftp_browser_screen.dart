@@ -31,7 +31,12 @@ class SftpBrowserScreen extends ConsumerStatefulWidget {
 }
 
 class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
-  late SftpBrowserBackend _backend;
+  // Null until the backend has been successfully resolved AND used once; all
+  // actions guard on this so a failed init can never hit an unusable backend.
+  SftpBrowserBackend? _backend;
+  // The resolved backend, kept for close() in dispose even if init failed
+  // midway (a created SftpService may already hold an SFTP channel).
+  SftpBrowserBackend? _resolvedForClose;
   late final LocalFileService _localFiles;
   String _currentPath = '.';
   List<SftpEntry> _entries = [];
@@ -45,18 +50,34 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
     _refresh();
   }
 
-  /// Builds the production backend lazily on first use. We can't do it in
-  /// initState because we need `ref`, and the session may reconnect later —
-  /// SftpService itself handles client-replacement, so a single instance is
-  /// fine for the screen's lifetime.
+  @override
+  void dispose() {
+    // The screen owns the SftpService it created (and its SFTP channel).
+    _resolvedForClose?.close();
+    super.dispose();
+  }
+
+  /// Resolves the backend exactly once and reuses it for the screen's
+  /// lifetime. We can't do it in initState because we need `ref`, and the
+  /// session may reconnect later — SftpService itself handles
+  /// client-replacement, so a single instance is fine.
   SftpBrowserBackend _resolveBackend() {
+    final existing = _resolvedForClose;
+    if (existing != null) return existing;
     final injected = widget.backend;
-    if (injected != null) return injected;
-    final session = ref.read(sessionListProvider).firstWhere(
+    if (injected != null) {
+      _resolvedForClose = injected;
+      return injected;
+    }
+    final session = ref
+        .read(sessionListProvider)
+        .firstWhere(
           (s) => s.id == widget.sessionId,
           orElse: () => throw StateError('Session not found'),
         );
-    return SftpService(session.sshService);
+    final created = SftpService(session.sshService);
+    _resolvedForClose = created;
+    return created;
   }
 
   Future<void> _refresh() async {
@@ -65,19 +86,22 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
       _error = null;
     });
     try {
-      _backend = _resolveBackend();
+      final backend = _resolveBackend();
       // Normalise the starting '.' to an absolute path on first load.
       if (_currentPath == '.') {
-        _currentPath = await _backend.absolute('.');
+        _currentPath = await backend.absolute('.');
       }
-      final entries = await _backend.listdir(_currentPath);
+      final entries = await backend.listdir(_currentPath);
       if (!mounted) return;
+      // Backend is usable; enable actions.
+      _backend = backend;
       setState(() {
         _entries = entries;
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
+      _backend = null;
       setState(() {
         _error = sftpErrorMessage(e);
         _loading = false;
@@ -98,13 +122,23 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
   }
 
   Future<void> _newFolder() async {
+    final backend = _backend;
+    if (backend == null) {
+      _snack('Not connected');
+      return;
+    }
     final name = await _promptForText(
       title: 'New Folder',
       label: 'Folder name',
     );
     if (name == null || name.isEmpty) return;
+    final nameError = validateEntryName(name);
+    if (nameError != null) {
+      _snack(nameError);
+      return;
+    }
     try {
-      await _backend.mkdir(joinPath(_currentPath, name));
+      await backend.mkdir(joinPath(_currentPath, name));
       _refresh();
     } catch (e) {
       _snack(sftpErrorMessage(e));
@@ -112,13 +146,36 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
   }
 
   Future<void> _upload() async {
+    final backend = _backend;
+    if (backend == null) {
+      _snack('Not connected');
+      return;
+    }
     final source = await _localFiles.pickUpload();
     if (source == null) return;
     final baseName = source.split(RegExp(r'[/\\]')).last;
+    final nameError = validateEntryName(baseName);
+    if (nameError != null) {
+      _snack(nameError);
+      return;
+    }
     final remote = joinPath(_currentPath, baseName);
+    try {
+      // Never silently truncate an existing remote file.
+      if (await backend.exists(remote)) {
+        final confirmed = await _confirm(
+          title: 'Overwrite',
+          message: '"$baseName" already exists here. Overwrite it?',
+          confirmLabel: 'Overwrite',
+        );
+        if (confirmed != true) return;
+      }
+    } catch (_) {
+      // Existence check is best-effort; proceed with the upload attempt.
+    }
     _snack('Uploading $baseName…');
     try {
-      await _backend.upload(source, remote);
+      await backend.upload(source, remote);
       _refresh();
       if (mounted) _snack('Uploaded $baseName');
     } catch (e) {
@@ -131,8 +188,13 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
     if (target == null) return;
     final remote = joinPath(_currentPath, entry.name);
     _snack('Downloading ${entry.name}…');
+    final backend = _backend;
+    if (backend == null) {
+      _snack('Not connected');
+      return;
+    }
     try {
-      await _backend.download(remote, target);
+      await backend.download(remote, target);
       if (mounted) _snack('Saved to $target');
     } catch (e) {
       _snack('Download failed: ${sftpErrorMessage(e)}');
@@ -140,14 +202,24 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
   }
 
   Future<void> _rename(SftpEntry entry) async {
+    final backend = _backend;
+    if (backend == null) {
+      _snack('Not connected');
+      return;
+    }
     final newName = await _promptForText(
       title: 'Rename',
       label: 'New name',
       initial: entry.name,
     );
     if (newName == null || newName.isEmpty || newName == entry.name) return;
+    final nameError = validateEntryName(newName);
+    if (nameError != null) {
+      _snack(nameError);
+      return;
+    }
     try {
-      await _backend.rename(
+      await backend.rename(
         joinPath(_currentPath, entry.name),
         joinPath(_currentPath, newName),
       );
@@ -158,6 +230,11 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
   }
 
   Future<void> _delete(SftpEntry entry) async {
+    final backend = _backend;
+    if (backend == null) {
+      _snack('Not connected');
+      return;
+    }
     final confirmed = await _confirm(
       title: 'Delete',
       message: 'Delete "${entry.name}"?',
@@ -166,9 +243,9 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
     try {
       final path = joinPath(_currentPath, entry.name);
       if (entry.isDirectory) {
-        await _backend.rmdir(path);
+        await backend.rmdir(path);
       } else {
-        await _backend.remove(path);
+        await backend.remove(path);
       }
       _refresh();
     } catch (e) {
@@ -182,6 +259,9 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
     String initial = '',
   }) {
     final controller = TextEditingController(text: initial);
+    // Note: the controller is intentionally not disposed here — the dialog's
+    // TextField is still built during the route exit animation, so disposing
+    // on pop would throw "used after being disposed".
     return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -205,7 +285,11 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
     );
   }
 
-  Future<bool?> _confirm({required String title, required String message}) {
+  Future<bool?> _confirm({
+    required String title,
+    required String message,
+    String confirmLabel = 'Delete',
+  }) {
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -219,7 +303,7 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
+            child: Text(confirmLabel),
           ),
         ],
       ),
@@ -228,9 +312,9 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -252,39 +336,41 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
           IconButton(
             icon: const Icon(Icons.create_new_folder),
             tooltip: 'New Folder',
-            onPressed: _newFolder,
+            // Disabled until the backend is up so a failed init can't be
+            // tapped into an uninitialized-backend crash.
+            onPressed: _backend == null ? null : _newFolder,
           ),
           IconButton(
             icon: const Icon(Icons.upload_file),
             tooltip: 'Upload Here',
-            onPressed: _upload,
+            onPressed: _backend == null ? null : _upload,
           ),
         ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? _ErrorState(message: _error!, onRetry: _refresh)
-              : _entries.isEmpty
-                  ? const _EmptyState()
-                  : ListView.builder(
-                      itemCount: _entries.length,
-                      itemBuilder: (context, index) {
-                        final entry = _entries[index];
-                        return _EntryTile(
-                          entry: entry,
-                          onTap: () {
-                            if (entry.isDirectory) {
-                              _navigateInto(entry.name);
-                            } else {
-                              _download(entry);
-                            }
-                          },
-                          onRename: () => _rename(entry),
-                          onDelete: () => _delete(entry),
-                        );
-                      },
-                    ),
+          ? _ErrorState(message: _error!, onRetry: _refresh)
+          : _entries.isEmpty
+          ? const _EmptyState()
+          : ListView.builder(
+              itemCount: _entries.length,
+              itemBuilder: (context, index) {
+                final entry = _entries[index];
+                return _EntryTile(
+                  entry: entry,
+                  onTap: () {
+                    if (entry.isDirectory) {
+                      _navigateInto(entry.name);
+                    } else {
+                      _download(entry);
+                    }
+                  },
+                  onRename: () => _rename(entry),
+                  onDelete: () => _delete(entry),
+                );
+              },
+            ),
     );
   }
 }
@@ -341,16 +427,18 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.folder_open,
-              size: 64, color: Theme.of(context).colorScheme.primary),
+          Icon(
+            Icons.folder_open,
+            size: 64,
+            color: Theme.of(context).colorScheme.primary,
+          ),
           const SizedBox(height: 16),
           Text(
             'Empty folder',
             style: TextStyle(
-              color: Theme.of(context)
-                  .colorScheme
-                  .onSurface
-                  .withValues(alpha: 0.6),
+              color: Theme.of(
+                context,
+              ).colorScheme.onSurface.withValues(alpha: 0.6),
             ),
           ),
         ],
@@ -370,8 +458,11 @@ class _ErrorState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.error_outline,
-              size: 64, color: Theme.of(context).colorScheme.error),
+          Icon(
+            Icons.error_outline,
+            size: 64,
+            color: Theme.of(context).colorScheme.error,
+          ),
           const SizedBox(height: 16),
           Text(message, textAlign: TextAlign.center),
           const SizedBox(height: 16),
