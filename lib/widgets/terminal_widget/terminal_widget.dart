@@ -293,7 +293,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
                   textInputAction: TextInputAction.search,
                   decoration: const InputDecoration(
                     isDense: true,
-                    hintText: '搜索（Ctrl+F）',
+                    hintText: 'Search (Ctrl+F)',
                     border: InputBorder.none,
                   ),
                   onChanged: _onQueryChanged,
@@ -301,7 +301,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
                 ),
               ),
               IconButton(
-                tooltip: '区分大小写',
+                tooltip: 'Match case',
                 iconSize: 18,
                 isSelected: _caseSensitive,
                 selectedIcon: const Icon(Icons.text_fields),
@@ -312,7 +312,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
                 },
               ),
               IconButton(
-                tooltip: '正则表达式',
+                tooltip: 'Regex',
                 iconSize: 18,
                 isSelected: _regex,
                 selectedIcon: const Icon(Icons.code),
@@ -328,21 +328,21 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
                   child: Text(count, style: const TextStyle(fontSize: 13)),
                 ),
               IconButton(
-                tooltip: '上一个',
+                tooltip: 'Previous match',
                 iconSize: 20,
                 icon: const Icon(Icons.keyboard_arrow_up),
                 onPressed:
                     _result.matches.isEmpty ? null : () => _goto(_current - 1),
               ),
               IconButton(
-                tooltip: '下一个',
+                tooltip: 'Next match',
                 iconSize: 20,
                 icon: const Icon(Icons.keyboard_arrow_down),
                 onPressed:
                     _result.matches.isEmpty ? null : () => _goto(_current + 1),
               ),
               IconButton(
-                tooltip: '关闭 (Esc)',
+                tooltip: 'Close (Esc)',
                 iconSize: 20,
                 icon: const Icon(Icons.close),
                 onPressed: _closeSearch,

@@ -38,20 +38,20 @@ void main() {
       await tester.pump();
 
       // Search bar not visible initially.
-      expect(find.byTooltip('关闭 (Esc)'), findsNothing);
+      expect(find.byTooltip('Close (Esc)'), findsNothing);
 
       // Focus the terminal so it receives the key event, then Ctrl+F.
       await tester.tap(find.byType(TerminalView));
       await tester.pumpAndSettle();
       await _sendCtrlF(tester);
 
-      expect(find.byTooltip('关闭 (Esc)'), findsOneWidget);
-      expect(find.text('搜索（Ctrl+F）'), findsOneWidget);
+      expect(find.byTooltip('Close (Esc)'), findsOneWidget);
+      expect(find.text('Search (Ctrl+F)'), findsOneWidget);
 
       // Esc closes it.
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.byTooltip('关闭 (Esc)'), findsNothing);
+      expect(find.byTooltip('Close (Esc)'), findsNothing);
     });
 
     testWidgets('typing a query reports match count', (tester) async {
@@ -85,11 +85,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('1/3'), findsOneWidget);
 
-      await tester.tap(find.byTooltip('下一个'));
+      await tester.tap(find.byTooltip('Next match'));
       await tester.pumpAndSettle();
       expect(find.text('2/3'), findsOneWidget);
 
-      await tester.tap(find.byTooltip('上一个'));
+      await tester.tap(find.byTooltip('Previous match'));
       await tester.pumpAndSettle();
       expect(find.text('1/3'), findsOneWidget);
     });
