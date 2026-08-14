@@ -122,10 +122,17 @@ class _RemoteForward extends ActiveForward {
         '(the local endpoint to dial back to, rule ${rule.id})',
       );
     }
-    final forward = await client.forwardRemote(port: rule.localPort);
+    // Bind on the address the rule asks the *server* to listen on
+    // ([ForwardRule.localHost], default loopback) rather than dartssh2's
+    // default of '' (all interfaces) — matching OpenSSH's no-GatewayPorts
+    // behaviour. '0.0.0.0' opts into all interfaces explicitly.
+    final forward = await client.forwardRemote(
+      host: rule.localHost,
+      port: rule.localPort,
+    );
     if (forward == null) {
       throw StateError(
-        'Server refused remote forward on port ${rule.localPort}',
+        'Server refused remote forward on ${rule.localHost}:${rule.localPort}',
       );
     }
     final sub = forward.connections.listen((channel) async {

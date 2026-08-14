@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picshell/services/ssh_service.dart';
 
@@ -143,6 +145,38 @@ void main() {
         password: 'pass',
       );
       expect(config.port, 2222);
+    });
+  });
+
+  group('SshService key loading errors', () {
+    test('invalid or passphrase-protected key surfaces a clear error',
+        () async {
+      // A plain TCP server that accepts but never speaks SSH: the client
+      // builds (and loads the key for) the connection before any handshake.
+      final server = await ServerSocket.bind('127.0.0.1', 0);
+      final sub = server.listen((s) {}); // swallow connections
+      final service = SshService();
+      try {
+        final config = SshConnectionConfig(
+          host: '127.0.0.1',
+          port: server.port,
+          username: 'user',
+          authMethod: SshAuthMethod.key,
+          privateKeyPem: 'not a valid pem',
+        );
+        await expectLater(
+          service.connect(config),
+          throwsA(isA<Exception>().having(
+            (e) => e.toString(),
+            'message',
+            stringContainsInOrder(['Failed to load private key']),
+          )),
+        );
+      } finally {
+        await sub.cancel();
+        await server.close();
+        service.dispose();
+      }
     });
   });
 }

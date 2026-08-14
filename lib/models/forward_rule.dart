@@ -12,9 +12,10 @@ enum ForwardType {
   @HiveField(0)
   local,
 
-  /// Remote forward (`ssh -R remotePort:localHost:localPort`). The server
-  /// listens on [remotePort] and tunnels incoming connections back to the
-  /// client's [localHost]:[localPort].
+  /// Remote forward (`ssh -R remotePort:targetHost:targetPort`). The server
+  /// listens on [ForwardRule.localPort] at [ForwardRule.localHost] (loopback
+  /// on the server by default) and tunnels incoming connections back to the
+  /// client, which dials [remoteHost]:[remotePort] locally.
   @HiveField(1)
   remote,
 
@@ -38,18 +39,30 @@ class ForwardRule extends HiveObject {
   @HiveField(1)
   final ForwardType type;
 
-  /// Interface to bind the listener on. Usually '127.0.0.1'; use '0.0.0.0' to
-  /// expose the tunnel on all interfaces (caveat emptor).
+  /// Interface to bind the listener on — *whose* listener depends on the
+  /// forward type:
+  /// - [ForwardType.local] / [ForwardType.socks]: the address this client
+  ///   listens on. Usually '127.0.0.1'; use '0.0.0.0' to expose the tunnel on
+  ///   all interfaces (caveat emptor).
+  /// - [ForwardType.remote]: the address the SSH *server* is asked to listen
+  ///   on. Defaults to '127.0.0.1' (loopback on the server, matching
+  ///   OpenSSH's no-`GatewayPorts` behaviour); '0.0.0.0' exposes the forward
+  ///   on all server interfaces.
   @HiveField(2)
   final String localHost;
 
-  /// Local port to listen on. Pass 0 to let the OS choose a free port; the
-  /// actually bound port is reported back via the runtime forward state.
+  /// Port the forward's listener binds to — the local client port for
+  /// [ForwardType.local] / [ForwardType.socks], and the *remote* (server-side)
+  /// listen port for [ForwardType.remote]. Pass 0 for local/socks rules to
+  /// let the OS choose a free port; the actually bound port is reported back
+  /// via the runtime forward state.
   @HiveField(3)
   final int localPort;
 
-  /// Destination host for [ForwardType.local] / [ForwardType.remote].
-  /// Unused (and should be null) for [ForwardType.socks].
+  /// Destination host for [ForwardType.local] / [ForwardType.remote]. For
+  /// local rules this is reachable from the SSH server; for remote rules it
+  /// is the local endpoint the client dials back to. Unused (and should be
+  /// null) for [ForwardType.socks].
   @HiveField(4)
   final String? remoteHost;
 
@@ -79,7 +92,9 @@ class ForwardRule extends HiveObject {
       case ForwardType.local:
         return '-L $localPort:${remoteHost ?? '?'}:${remotePort ?? '?'}';
       case ForwardType.remote:
-        return '-R $localPort:${remoteHost ?? '?'}:${remotePort ?? '?'}';
+        final bindHost =
+            localHost == '127.0.0.1' ? '' : '$localHost:';
+        return '-R $bindHost$localPort:${remoteHost ?? '?'}:${remotePort ?? '?'}';
       case ForwardType.socks:
         return '-D $localPort';
     }

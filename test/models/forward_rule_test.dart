@@ -104,5 +104,40 @@ void main() {
         '-D 1080',
       );
     });
+
+    test('remote forward summary includes non-default server bind address',
+        () {
+      expect(
+        ForwardRule(
+          id: 'd',
+          type: ForwardType.remote,
+          localHost: '0.0.0.0',
+          localPort: 9000,
+          remoteHost: 'localhost',
+          remotePort: 22,
+        ).summary,
+        '-R 0.0.0.0:9000:localhost:22',
+      );
+    });
+  });
+
+  group('ForwardRule remote semantics', () {
+    test('persists the server-side bind address for a remote rule', () async {
+      final box = await Hive.openBox<ForwardRule>('remote_bind_fwd');
+      final rule = ForwardRule(
+        id: 'r3',
+        type: ForwardType.remote,
+        localHost: '0.0.0.0',
+        localPort: 9022,
+        remoteHost: '192.168.1.10',
+        remotePort: 22,
+      );
+      await box.put('r3', rule);
+      final read = box.get('r3')!;
+      expect(read.localHost, '0.0.0.0');
+      expect(read.localPort, 9022);
+      expect(read.remoteHost, '192.168.1.10');
+      await box.deleteFromDisk();
+    });
   });
 }
