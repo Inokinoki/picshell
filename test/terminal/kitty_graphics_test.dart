@@ -121,6 +121,44 @@ void main() {
       expect(received[0]['name'], 'kitty-2');
       expect(received[0]['bytes'], png);
     });
+
+    test('non-transmit action (a=d) with payload emits nothing', () {
+      // A hostile delete/delete-range chunk carrying a payload must not be
+      // emitted as a phantom image.
+      terminal.write('\x1b_Ga=d,f=100;${_png1x1B64}$_st');
+      expect(received.length, 0);
+      terminal.write('\x1b_Ga=T,f=100;i=9,m=1;AAAA$_st'); // still healthy
+      terminal.write(
+          '\x1b_Gm=0;${base64.encode(base64.decode(_png1x1B64))}$_st');
+      expect(received.length, 1);
+    });
+
+    test('oversized APC payload (>4 MiB) is dropped, not accumulated', () {
+      // ~5 MiB of base64-ish payload in one APC — over the parser cap.
+      final big = 'A' * (5 * 1024 * 1024);
+      terminal.write('\x1b_Ga=T,f=100,m=1;$big$_st');
+      // The transfer was consumed and dropped; a follow-up image works.
+      terminal.write('\x1b_Ga=T,f=100,i=3;${base64.encode(base64.decode(_png1x1B64))}$_st');
+      expect(received.length, 1);
+      expect(received[0]['name'], 'kitty-3');
+    });
+
+    test('unterminated multi-MiB APC stream does not wedge the parser', () {
+      // Feed 10 MiB of APC payload *without* a terminator in chunks, then
+      // terminate and check the parser recovered: the payload never leaked
+      // into the text buffer and following text renders normally.
+      const chunkSize = 64 * 1024;
+      final chunk = 'B' * chunkSize;
+      for (var i = 0; i < (10 * 1024 * 1024) ~/ chunkSize; i++) {
+        terminal.write('\x1b_Ga=T,f=100,m=1;$chunk');
+      }
+      terminal.write('$_st');
+      terminal.write('done');
+      final text = terminal.buffer.getText();
+      expect(text, contains('done'));
+      expect(text, isNot(contains('BBBB')));
+      expect(received.length, 0, reason: 'oversized transfer must be dropped');
+    });
   });
 
   group('DCS / Sixel handling', () {
@@ -131,6 +169,16 @@ void main() {
       final text = terminal.buffer.getText();
       expect(text, isNot(contains('ZZZZ')));
       expect(text, isNot(contains('!10')));
+    });
+
+    test('oversized Sixel DCS payload is dropped, not accumulated', () {
+      final terminal = Terminal(maxLines: 1000);
+      final big = 'C' * (5 * 1024 * 1024);
+      terminal.write('\x1bPq$big\x1b\\');
+      terminal.write('ok');
+      final text = terminal.buffer.getText();
+      expect(text, contains('ok'));
+      expect(text, isNot(contains('CCCC')));
     });
   });
 }

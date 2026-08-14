@@ -36,10 +36,18 @@ class SixelDecoder {
   static const maxRepeat = 4096;
   static const maxPixels = 1 << 23; // 8 Mpx ≈ 32 MiB RGBA
 
+  /// Highest colour-register number stored, per the DEC spec (2^16 - 1).
+  /// Definitions with a higher register number are skipped so a hostile
+  /// `#999999999;...` stream can't grow the palette map without bound.
+  static const maxRegister = 65535;
+
   SixelImage? decode(String data) {
+    // One palette shared by both passes (measure + rasterise) — definitions
+    // are parsed once instead of twice.
+    final palette = <int, _Color>{};
     var maxX = 0;
     var maxBand = 0; // number of 6-row bands touched
-    _walk(data, (x, y, r, g, b) {
+    _walk(data, palette, (x, y, r, g, b) {
       if (x + 1 > maxX) maxX = x + 1;
       final band = y ~/ 6 + 1;
       if (band > maxBand) maxBand = band;
@@ -53,7 +61,7 @@ class SixelDecoder {
       return null;
     }
     final rgba = Uint8List(width * height * 4); // zeros = fully transparent
-    _walk(data, (x, y, r, g, b) {
+    _walk(data, palette, (x, y, r, g, b) {
       final idx = (y * width + x) * 4;
       rgba[idx] = r;
       rgba[idx + 1] = g;
@@ -65,9 +73,9 @@ class SixelDecoder {
 
   void _walk(
     String data,
+    Map<int, _Color> palette,
     void Function(int x, int y, int r, int g, int b) onPixel,
   ) {
-    final palette = <int, _Color>{};
     var currentReg = 0;
     var x = 0;
     var y = 0;
@@ -113,7 +121,7 @@ class SixelDecoder {
           final comps = _readNumbers(units, i, sep, 4);
           i = comps.$2;
           final color = _colorFromDef(comps.$1);
-          if (color != null) palette[reg] = color;
+          if (color != null && reg <= maxRegister) palette[reg] = color;
         }
         currentReg = reg;
         continue;
