@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/host_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/vault_provider.dart';
-import '../../services/host_store.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
