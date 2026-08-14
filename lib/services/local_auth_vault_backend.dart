@@ -14,7 +14,25 @@ class LocalAuthVaultBackend implements VaultBackend {
     LocalAuthentication? auth,
     FlutterSecureStorage? storage,
   })  : _auth = auth ?? LocalAuthentication(),
-        _storage = storage ?? const FlutterSecureStorage();
+        _storage = storage ??
+            const FlutterSecureStorage(
+              // OS-binding for the master key:
+              // - Apple `passcode` = kSecAttrAccessibleWhenPasscodeSet-
+              //   ThisDeviceOnly: the key is only readable while the device
+              //   passcode is set AND unlocked, and never migrates to another
+              //   device or backup.
+              // - Android EncryptedSharedPreferences: values are wrapped by an
+              //   Android Keystore key (hardware-backed where available).
+              // This defeats backup/off-device extraction of the key; it is
+              // still NOT biometric-bound (see VaultService's threat-model
+              // note — local_auth cannot expose biometryAny/CryptoObject).
+              iOptions: IOSOptions(
+                accessibility: KeychainAccessibility.passcode,
+              ),
+              aOptions: AndroidOptions(
+                encryptedSharedPreferences: true,
+              ),
+            );
 
   final LocalAuthentication _auth;
   final FlutterSecureStorage _storage;

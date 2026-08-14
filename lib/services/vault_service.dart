@@ -40,12 +40,16 @@ abstract class VaultBackend {
 /// **Threat-model caveat (v1):** the biometric gate is enforced in Dart
 /// (the app only calls [setPassphrase] after a prompt), NOT by the OS keychain.
 /// The master key itself is readable from the platform secret store without a
-/// biometric (see [existingMasterKey]). This defeats raw disk extraction and
-/// the casual unlocked-phone snoop, but an attacker with disk access *and* the
-/// keystore entry (rooted/jailbroken device, or forensic extraction while
-/// unlocked) can recover credentials without a biometric. True biometric-bound
-/// encryption would need SecAccessControl(biometryAny) / CryptoObject, which
-/// local_auth 2.x does not expose from Dart — tracked as a v2 follow-up.
+/// biometric (see [existingMasterKey]). The key IS OS-bound though: on Apple
+/// platforms it uses kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly (no
+/// backup/device migration, requires an unlocked passcode-set device) and on
+/// Android EncryptedSharedPreferences (Keystore-wrapped). This defeats raw
+/// disk extraction, backups, and the casual unlocked-phone snoop; an attacker
+/// with disk access *and* the keystore entry (rooted/jailbroken device, or
+/// forensic extraction while unlocked) can still recover credentials without
+/// a biometric. True biometric-bound key release would need
+/// SecAccessControl(biometryAny) / CryptoObject, which local_auth 2.x does not
+/// expose from Dart — tracked as a v2 follow-up.
 /// credentials unrecoverable — the connection metadata survives, passwords do
 /// not.
 class VaultService {
