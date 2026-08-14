@@ -137,6 +137,29 @@ void main() async {
       expect(utf8.decode(banner), 'SSH-');
       await s.close();
     }, skip: skip, timeout: const Timeout(Duration(seconds: 15)));
+
+    test('a stalled handshake is dropped after the deadline', () async {
+      // Rebind with a short handshake deadline for this test only.
+      await forward!.stop();
+      forward = await ActiveForward.bind(
+        client!,
+        ForwardRule(
+          id: 'socks-timeout-test',
+          type: ForwardType.socks,
+          localPort: 0,
+        ),
+        socksHandshakeTimeout: const Duration(milliseconds: 300),
+      );
+
+      final s = await Socket.connect('127.0.0.1', forward!.boundPort);
+      final closed = Completer<void>();
+      s.listen((_) {}, onDone: closed.complete, onError: (_) => closed.complete());
+      // Send only the version byte; never send NMETHODS. A connection without
+      // the handshake deadline would hang forever (slowloris).
+      s.add(Uint8List.fromList([0x05]));
+      await closed.future.timeout(const Duration(seconds: 5));
+      // Reaching here means the server closed the stalled connection.
+    }, skip: skip, timeout: const Timeout(Duration(seconds: 15)));
   });
 }
 

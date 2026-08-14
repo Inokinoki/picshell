@@ -26,17 +26,34 @@ abstract class ActiveForward {
 
   /// Builds the appropriate forward for [rule] on [client]. Throws if [client]
   /// is not yet authenticated or the requested port is already in use.
-  static Future<ActiveForward> bind(SSHClient client, ForwardRule rule) {
+  ///
+  /// [socksHandshakeTimeout] bounds how long a SOCKS connection may take to
+  /// finish method selection + CONNECT before being dropped (slowloris guard).
+  /// Production callers use the default; tests may shorten it.
+  static Future<ActiveForward> bind(
+    SSHClient client,
+    ForwardRule rule, {
+    Duration socksHandshakeTimeout = defaultSocksHandshakeTimeout,
+  }) {
     switch (rule.type) {
       case ForwardType.local:
         return _LocalForward.bind(client, rule);
       case ForwardType.remote:
         return _RemoteForward.bind(client, rule);
       case ForwardType.socks:
-        return _DynamicForward.bind(client, rule);
+        return _DynamicForward.bind(
+          client,
+          rule,
+          handshakeTimeout: socksHandshakeTimeout,
+        );
     }
   }
 }
+
+/// How long a SOCKS5 connection may take to complete method selection and the
+/// CONNECT request before picshell drops it. Guards against clients that
+/// connect and then stall, pinning their connection and buffer forever.
+const defaultSocksHandshakeTimeout = Duration(seconds: 20);
 
 /// Bidirectionally pipes a local [Socket] to an [SSHForwardChannel]. Either
 /// side closing or erroring tears down both. Used by local and remote forwards.
@@ -152,7 +169,11 @@ class _DynamicForward extends ActiveForward {
   _DynamicForward._(this._server, String ruleId)
       : super(ruleId, ForwardType.socks, _server.port);
 
-  static Future<_DynamicForward> bind(SSHClient client, ForwardRule rule) async {
+  static Future<_DynamicForward> bind(
+    SSHClient client,
+    ForwardRule rule, {
+    Duration handshakeTimeout = defaultSocksHandshakeTimeout,
+  }) async {
     final server = await ServerSocket.bind(rule.localHost, rule.localPort);
     final fwd = _DynamicForward._(server, rule.id);
     server.listen(
@@ -160,7 +181,7 @@ class _DynamicForward extends ActiveForward {
         final conn = _SocksConn(socket);
         fwd._conns.add(conn);
         conn.done.whenComplete(() => fwd._conns.remove(conn));
-        unawaited(conn.negotiate(client));
+        unawaited(conn.negotiate(client, timeout: handshakeTimeout));
       },
       onError: (_) {},
     );
@@ -193,8 +214,15 @@ class _SocksConn {
     _sub = socket.cast<Uint8List>().listen(
       (Uint8List data) {
         if (_channel != null) {
-          // Piping mode: forward straight to the remote channel.
-          _channel!.sink.add(data);
+          // Piping mode: forward straight to the remote channel. The channel
+          // may already be closed (remote torn down) — a sink.add on a closed
+          // channel throws, so treat that as teardown instead of letting it
+          // escape as an unhandled zone error.
+          try {
+            _channel!.sink.add(data);
+          } catch (_) {
+            close();
+          }
         } else {
           _buf.addAll(data);
           _fill?.complete();
@@ -225,9 +253,25 @@ class _SocksConn {
     return out;
   }
 
+  /// Runs the SOCKS5 handshake under a deadline: a client that connects and
+  /// stalls would otherwise pin this connection (and its buffer) forever
+  /// (slowloris). On expiry [close] fires, which unblocks any pending [read]
+  /// and tears the socket down.
+  Future<void> negotiate(
+    SSHClient client, {
+    Duration timeout = defaultSocksHandshakeTimeout,
+  }) async {
+    final deadline = Timer(timeout, close);
+    try {
+      await _negotiate(client);
+    } finally {
+      deadline.cancel();
+    }
+  }
+
   /// Runs the SOCKS5 method-selection + CONNECT handshake, then opens a
   /// direct-tcpip channel and switches this connection into piping mode.
-  Future<void> negotiate(SSHClient client) async {
+  Future<void> _negotiate(SSHClient client) async {
     try {
       // 1. Method selection: VER NMETHODS METHODS...
       final ver = await read(1);
@@ -264,7 +308,10 @@ class _SocksConn {
           host = '${a[0]}.${a[1]}.${a[2]}.${a[3]}';
         case 0x03: // domain
           final len = (await read(1))[0];
-          host = utf8.decode(await read(len));
+          // A malformed domain would otherwise abort the whole negotiate with
+          // a FormatException; allowMalformed keeps it flowing (the CONNECT
+          // then simply fails at the remote end with 0x04).
+          host = utf8.decode(await read(len), allowMalformed: true);
         case 0x04: // IPv6 — format 16 bytes as colon-separated hex groups.
           final a = await read(16);
           final groups = <String>[];
@@ -313,6 +360,15 @@ class _SocksConn {
     );
   }
 
+  /// Tears the connection down.
+  ///
+  /// Invariant: any bytes already queued on the socket (e.g. a SOCKS error
+  /// reply like 0xFF / 0x07 / 0x08 / 0x04) must be flushed to the peer before
+  /// the socket is destroyed — `Socket.add` only queues, and `destroy()`
+  /// discards unflushed output, which would silently swallow the reply. So we
+  /// await `flush()` (ignoring errors on already-broken sockets) and destroy in
+  /// its completion. This is hard to assert in a unit test (real TCP timing),
+  /// hence the comment.
   void close() {
     if (_closed) return;
     _closed = true;
@@ -320,7 +376,14 @@ class _SocksConn {
     _fill = null;
     _sub.cancel();
     _channel?.close();
-    socket.destroy();
+    unawaited(
+      socket.flush().then(
+        (_) {},
+        onError: (_) {},
+        // Graceful close when the flush succeeded; destroy also frees the
+        // fd promptly when the socket already errored.
+      ).whenComplete(socket.destroy),
+    );
     if (!_done.isCompleted) _done.complete();
   }
 }
