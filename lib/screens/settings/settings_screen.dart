@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/platform_capabilities.dart';
 import '../../services/ssh_config_import_service.dart';
-import '../../services/ssh_config_parser.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
