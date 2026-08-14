@@ -160,7 +160,7 @@ class _DynamicForward extends ActiveForward {
         final conn = _SocksConn(socket);
         fwd._conns.add(conn);
         conn.done.whenComplete(() => fwd._conns.remove(conn));
-        conn.negotiate(client);
+        unawaited(conn.negotiate(client));
       },
       onError: (_) {},
     );
