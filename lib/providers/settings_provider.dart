@@ -27,6 +27,16 @@ class AppSettings {
   final double fontSize;
   final double lineHeight;
 
+  /// Require biometric (FaceID/TouchID) unlock before the app is usable. When
+  /// enabled, saved passwords/private keys are encrypted at rest with a
+  /// device-bound key released only after a successful biometric prompt.
+  final bool requireBiometric;
+
+  /// Re-show the lock screen when the app returns from background. The
+  /// in-memory key is NOT cleared (a known v1 limitation), so this is a
+  /// UI-gate rather than a full re-encryption.
+  final bool relockOnBackground;
+
   const AppSettings({
     this.keyboardBarMode = KeyboardBarMode.auto,
     this.themeMode = ThemeMode.system,
@@ -34,6 +44,8 @@ class AppSettings {
     this.fontFamily = defaultFontFamily,
     this.fontSize = defaultFontSize,
     this.lineHeight = defaultLineHeight,
+    this.requireBiometric = false,
+    this.relockOnBackground = false,
   });
 
   AppSettings copyWith({
@@ -43,6 +55,8 @@ class AppSettings {
     String? fontFamily,
     double? fontSize,
     double? lineHeight,
+    bool? requireBiometric,
+    bool? relockOnBackground,
   }) {
     return AppSettings(
       keyboardBarMode: keyboardBarMode ?? this.keyboardBarMode,
@@ -51,6 +65,8 @@ class AppSettings {
       fontFamily: fontFamily ?? this.fontFamily,
       fontSize: fontSize ?? this.fontSize,
       lineHeight: lineHeight ?? this.lineHeight,
+      requireBiometric: requireBiometric ?? this.requireBiometric,
+      relockOnBackground: relockOnBackground ?? this.relockOnBackground,
     );
   }
 }
@@ -63,6 +79,12 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   static const _fontFamilyKey = 'fontFamily';
   static const _fontSizeKey = 'fontSize';
   static const _lineHeightKey = 'lineHeight';
+  static const _requireBiometricKey = 'requireBiometric';
+  static const _relockOnBackgroundKey = 'relockOnBackground';
+
+  /// Public Hive key for the require-biometric flag, so `main()` can read it
+  /// before the app (and thus [SettingsNotifier]) is running.
+  static const biometricKey = _requireBiometricKey;
 
   SettingsNotifier({bool loadFromStorage = true}) : super(const AppSettings()) {
     if (loadFromStorage) _load();
@@ -84,6 +106,8 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
       fontFamily: box.get(_fontFamilyKey, defaultValue: defaultFontFamily),
       fontSize: box.get(_fontSizeKey, defaultValue: defaultFontSize),
       lineHeight: box.get(_lineHeightKey, defaultValue: defaultLineHeight),
+      requireBiometric: box.get(_requireBiometricKey, defaultValue: false),
+      relockOnBackground: box.get(_relockOnBackgroundKey, defaultValue: false),
     );
   }
 
@@ -132,5 +156,17 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   /// Live-drag preview for line height — see [previewFontSize].
   void previewLineHeight(double lineHeight) {
     state = state.copyWith(lineHeight: lineHeight);
+  }
+
+  Future<void> setRequireBiometric(bool value) async {
+    state = state.copyWith(requireBiometric: value);
+    final box = await Hive.openBox(_boxName);
+    await box.put(_requireBiometricKey, value);
+  }
+
+  Future<void> setRelockOnBackground(bool value) async {
+    state = state.copyWith(relockOnBackground: value);
+    final box = await Hive.openBox(_boxName);
+    await box.put(_relockOnBackgroundKey, value);
   }
 }

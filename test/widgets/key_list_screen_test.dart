@@ -53,6 +53,8 @@ class _FakeHostStore implements HostStore {
   bool get isEncrypting => false;
   @override
   void setPassphrase(String passphrase) {}
+  @override
+  Future<void> reEncryptAll(String newPassphrase) async {}
 }
 
 SshKey _key(String id, String name, {String pub = 'ssh-ed25519 AAAA'}) =>
