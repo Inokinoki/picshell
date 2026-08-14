@@ -73,7 +73,7 @@ class SettingsScreen extends ConsumerWidget {
             settings.keyboardBarMode,
           ),
           const Divider(),
-          const _SectionHeader(title: '安全'),
+          const _SectionHeader(title: 'Security'),
           const _SecuritySection(),
         ],
       ),
@@ -209,20 +209,22 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
     return await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('启用生物识别加密'),
+            title: const Text('Enable biometric encryption'),
             content: const Text(
-              '已保存的密码和私钥将用设备绑定的密钥加密，每次启动需 Face ID / 指纹解锁。\n\n'
-              '注意：卸载 App 或重置设备会丢失该密钥，已加密的密码将无法恢复'
-              '（连接信息仍可查看）。',
+              'Saved passwords and private keys will be encrypted with a '
+              'device-bound key, unlocked by Face ID / fingerprint at launch.\n\n'
+              'Note: uninstalling the app or resetting the device loses that '
+              'key — encrypted passwords cannot be recovered (connection '
+              'details remain viewable).',
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('取消'),
+                child: const Text('Cancel'),
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('启用'),
+                child: const Text('Enable'),
               ),
             ],
           ),
@@ -240,21 +242,21 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
       children: [
         SwitchListTile(
           secondary: const Icon(Icons.fingerprint),
-          title: const Text('启动需生物识别'),
+          title: const Text('Require biometric unlock'),
           subtitle: Text(
             checking
-                ? '检测设备能力…'
+                ? 'Checking device capability…'
                 : available
-                    ? '用 Face ID / 指纹加密并解锁凭据'
-                    : '此设备不支持生物识别',
+                    ? 'Encrypt and unlock credentials with Face ID / fingerprint'
+                    : 'Biometrics not supported on this device',
           ),
           value: settings.requireBiometric && available,
           onChanged: (!available || _busy) ? null : _toggleRequire,
         ),
         SwitchListTile(
           secondary: const Icon(Icons.lock_clock),
-          title: const Text('后台返回重新锁定'),
-          subtitle: const Text('App 切回前台时重新要求解锁'),
+          title: const Text('Re-lock on background'),
+          subtitle: const Text('Require unlock again when returning to the app'),
           value: settings.relockOnBackground,
           onChanged: (!settings.requireBiometric)
               ? null

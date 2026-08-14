@@ -53,13 +53,14 @@ class _LockScreenState extends ConsumerState<LockScreen> {
                 ),
                 const SizedBox(height: 24),
                 Text(
-                  'Picshell 已锁定',
+                  'Picshell is locked',
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  '已保存的密码和私钥用设备绑定的密钥加密。\n'
-                  '请通过 Face ID / 指纹解锁。',
+                  'Saved passwords and private keys are encrypted with a '
+                  'device-bound key.\n'
+                  'Unlock with Face ID / fingerprint.',
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
@@ -67,7 +68,7 @@ class _LockScreenState extends ConsumerState<LockScreen> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 16),
                     child: Text(
-                      '解锁失败，请重试。',
+                      'Unlock failed. Please try again.',
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.error,
                       ),
@@ -82,7 +83,7 @@ class _LockScreenState extends ConsumerState<LockScreen> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.fingerprint),
-                  label: const Text('解锁'),
+                  label: const Text('Unlock'),
                 ),
               ],
             ),

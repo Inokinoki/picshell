@@ -42,14 +42,14 @@ void main() {
       ));
       await tester.pump();
 
-      expect(find.text('Picshell 已锁定'), findsOneWidget);
+      expect(find.text('Picshell is locked'), findsOneWidget);
       await tester.runAsync(() async {
-        await tester.tap(find.text('解锁'));
+        await tester.tap(find.text('Unlock'));
       });
       await tester.pumpAndSettle();
 
       // Auth returned false → still locked, retry hint shown.
-      expect(find.textContaining('解锁失败'), findsOneWidget);
+      expect(find.textContaining('Unlock failed'), findsOneWidget);
       expect(container.read(appLockProvider), isTrue);
     });
 
@@ -73,7 +73,7 @@ void main() {
       await tester.pump();
 
       await tester.runAsync(() async {
-        await tester.tap(find.text('解锁'));
+        await tester.tap(find.text('Unlock'));
       });
       // Process microtasks so the async unlock() completes. Avoid
       // pumpAndSettle: on success the button stays in its busy (spinner)
