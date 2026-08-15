@@ -93,9 +93,10 @@ class SshService {
   Stream<bool> get connectionState => _connectionController.stream;
   bool get isConnected => _client != null && _session != null;
 
-  /// The underlying authenticated client. Exposed so the session layer can
-  /// attach forwards and (later) ProxyJump channels. Returns null once
-  /// [disconnect] / [dispose] has run.
+  /// The live SSH client, or null when not connected. Exposed so the session
+  /// layer can attach forwards and ProxyJump channels; SFTP support opens a
+  /// subsystem on it too. Callers must re-acquire it after a reconnect (which
+  /// replaces `_client`). Returns null once [disconnect] / [dispose] has run.
   SSHClient? get client => _client;
 
   /// Read-only view of currently running forwards (for UI status).
@@ -123,6 +124,7 @@ class SshService {
     final forward = _activeForwards.remove(ruleId);
     if (forward != null) await forward.stop();
   }
+
 
   void _safeAddOutput(String data) {
     if (!_disposed && !_outputController.isClosed) {

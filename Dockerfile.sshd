@@ -1,0 +1,43 @@
+# Throwaway SSH server for integration tests. Runs sshd with password auth
+# and the default sftp subsystem, plus a known file under / for SFTP smoke
+# tests to assert on.
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openssh-server \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure sshd: root login + password auth + default sftp subsystem (the
+# openssh-server package ships with `Subsystem sftp /usr/lib/openssh/sftp-server`
+# in sshd_config, so SFTP works out of the box). The relaxed LoginGraceTime /
+# MaxStartups / ClientAlive settings tolerate the higher latency and parallel
+# test connections of the Android-emulator CI path, where the default values
+# can cause "Connection closed while waiting for channel open".
+RUN mkdir /var/run/sshd \
+    && echo 'root:testpass' | chpasswd \
+    && echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config \
+    && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && echo 'LoginGraceTime 300' >> /etc/ssh/sshd_config \
+    && echo 'MaxStartups 50:30:100' >> /etc/ssh/sshd_config \
+    && echo 'ClientAliveInterval 60' >> /etc/ssh/sshd_config \
+    && echo 'ClientAliveCountMax 10' >> /etc/ssh/sshd_config
+
+# A marker file SFTP smoke tests can list/read. The host/port are passed in
+# via env at test time; the file content is what downloads verify against.
+RUN echo 'picshell-sftp-smoke' > /picshell_sftp_marker.txt
+
+# Script the inline-image integration test invokes over the terminal. Emits an
+# iTerm2 OSC 1337 sequence carrying a minimal 1x1 PNG with the params the test
+# asserts on (name=t.png base64-encoded per spec, width=80, height=40). The
+# PNG bytes are inlined so we don't need ImageMagick in the image.
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"' \
+    'printf "\\033]1337;File=inline=1;name=dC5wbmc=;width=80;height=40:%s\\a\\n" "$B64"' \
+    > /tmp/send.sh && chmod +x /tmp/send.sh
+
+EXPOSE 2222
+
+# Run sshd on port 2222 (non-privileged would need rootless config; root in
+# the container can bind any port) in the foreground.
+CMD ["/usr/sbin/sshd", "-D", "-p", "2222"]

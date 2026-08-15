@@ -29,6 +29,19 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # Build and run the throwaway sshd (with SFTP subsystem) that the
+      # integration tests connect to. Publish it on host port 2222; the
+      # Android emulator reaches the host loopback via 10.0.2.2.
+      - name: Start sshd container
+        run: |
+          docker build -f Dockerfile.sshd -t picshell-sshd-test .
+          docker run -d --name sshd -p 2222:2222 picshell-sshd-test
+          # Wait until the port accepts connections.
+          for i in $(seq 1 20); do
+            if nc -z localhost 2222; then echo "sshd up"; break; fi
+            sleep 1
+          done
+
       - name: Run unit tests
         run: flutter test test/
 
@@ -39,7 +52,16 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_5
-          script: flutter test integration_test/ -d emulator-5554
+          # String.fromEnvironment is a compile-time constant, so the SSH
+          # target must be passed via --dart-define (NOT process env vars).
+          # 10.0.2.2 is the emulator's alias for the host loopback, where the
+          # sshd container is published; credentials match Dockerfile.sshd.
+          script: >
+            flutter test integration_test/ -d emulator-5554
+            --dart-define=TEST_SSH_HOST=10.0.2.2
+            --dart-define=TEST_SSH_PORT=2222
+            --dart-define=TEST_SSH_USER=root
+            --dart-define=TEST_SSH_PASS=testpass
 
       - name: Upload test screenshots
         if: always()

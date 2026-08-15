@@ -1,3 +1,5 @@
+import 'dart:io' show Directory, File;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -15,10 +17,20 @@ import 'package:picshell/providers/session_provider.dart';
 import 'package:picshell/providers/settings_provider.dart';
 import 'package:picshell/services/host_store.dart';
 import 'package:picshell/services/known_hosts_store.dart';
+import 'package:picshell/services/sftp_service.dart';
 import 'package:picshell/services/ssh_service.dart';
 import 'package:picshell/widgets/floating_image_widget.dart';
 
 bool _hiveReady = false;
+
+/// Connection target for the throwaway docker sshd. Defaults to localhost for
+/// local runs; CI injects 10.0.2.2 (the Android emulator's alias for the host
+/// loopback) so the emulator can reach the sshd container published on the
+/// runner host. Port defaults to 2222 (Dockerfile.sshd).
+const _sshHost = String.fromEnvironment('TEST_SSH_HOST', defaultValue: '127.0.0.1');
+const _sshPort = int.fromEnvironment('TEST_SSH_PORT', defaultValue: 2222);
+const _sshUser = String.fromEnvironment('TEST_SSH_USER', defaultValue: 'root');
+const _sshPass = String.fromEnvironment('TEST_SSH_PASS', defaultValue: 'testpass');
 
 Future<ProviderContainer> _initApp() async {
   if (!_hiveReady) {
@@ -74,6 +86,55 @@ class _AlwaysTrustKnownHostsStore implements KnownHostsStore {
   ) async {}
 }
 
+/// Drives an SSH session open against the test sshd, retrying on handshake
+/// failures. The Android emulator → host (10.0.2.2) network path is
+/// occasionally flaky, and dartssh2 raises SSHStateError("Connection closed
+/// while waiting for channel open") if the transport drops mid-handshake.
+/// Retrying absorbs that transient failure without masking real bugs (a
+/// deterministic connection failure still surfaces after maxAttempts).
+///
+/// Returns true once a session reaches the connected state.
+Future<bool> _connectWithRetry(
+  WidgetTester tester,
+  ProviderContainer container,
+  Host host,
+  SshConnectionConfig config, {
+  int maxAttempts = 3,
+}) async {
+  final notifier = container.read(sessionListProvider.notifier);
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await notifier.openSession(host, config);
+    } catch (e) {
+      // Handshake threw; clean up any half-open session and back off.
+      final sessions = container.read(sessionListProvider);
+      for (final s in sessions) {
+        try {
+          notifier.closeSession(s.id);
+        } catch (_) {}
+      }
+      if (attempt == maxAttempts) rethrow;
+      await tester.pump(Duration(seconds: 2 * attempt));
+      continue;
+    }
+
+    // Poll for the connected state.
+    for (int i = 0; i < 60; i++) {
+      await tester.pump(const Duration(seconds: 1));
+      final sessions = container.read(sessionListProvider);
+      if (sessions.isNotEmpty && sessions.first.connected) return true;
+    }
+    // Connected state not reached within the window; close and retry.
+    final sessions = container.read(sessionListProvider);
+    for (final s in sessions) {
+      try {
+        notifier.closeSession(s.id);
+      } catch (_) {}
+    }
+  }
+  return false;
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -92,38 +153,24 @@ void main() {
       final host = Host(
         id: 'test-sshd',
         name: 'docker-sshd',
-        hostname: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        hostname: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authType: AuthType.password,
-        password: 'testpass',
+        password: _sshPass,
       );
       final config = SshConnectionConfig(
-        host: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        host: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authMethod: SshAuthMethod.password,
-        password: 'testpass',
+        password: _sshPass,
       );
 
-      await container
-          .read(sessionListProvider.notifier)
-          .openSession(host, config);
-
-      // Poll for the session to come up; SSH handshake + auth takes a few
-      // seconds on the emulator.
-      bool connected = false;
-      for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
-        final sessions = container.read(sessionListProvider);
-        if (sessions.isNotEmpty && sessions.first.connected) {
-          connected = true;
-          break;
-        }
-      }
+      final connected = await _connectWithRetry(tester, container, host, config);
 
       expect(connected, isTrue,
-          reason: 'SSH session should reach connected state within 60s');
+          reason: 'SSH session should reach connected state within retries');
 
       container.dispose();
     }, timeout: const Timeout(Duration(minutes: 2)));
@@ -142,33 +189,20 @@ void main() {
       final host = Host(
         id: 'test-sshd',
         name: 'docker-sshd',
-        hostname: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        hostname: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authType: AuthType.password,
-        password: 'testpass',
+        password: _sshPass,
       );
       final config = SshConnectionConfig(
-        host: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        host: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authMethod: SshAuthMethod.password,
-        password: 'testpass',
+        password: _sshPass,
       );
-      await container
-          .read(sessionListProvider.notifier)
-          .openSession(host, config);
-
-      // Wait for the session to be connected and the shell to be ready.
-      bool connected = false;
-      for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
-        final sessions = container.read(sessionListProvider);
-        if (sessions.isNotEmpty && sessions.first.connected) {
-          connected = true;
-          break;
-        }
-      }
+      final connected = await _connectWithRetry(tester, container, host, config);
       expect(connected, isTrue, reason: 'session should connect');
 
       final terminal = container.read(sessionListProvider).first.terminal;
@@ -220,31 +254,20 @@ void main() {
       final host = Host(
         id: 'test-sshd',
         name: 'docker-sshd',
-        hostname: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        hostname: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authType: AuthType.password,
-        password: 'testpass',
+        password: _sshPass,
       );
       final config = SshConnectionConfig(
-        host: '127.0.0.1',
-        port: 2222,
-        username: 'root',
+        host: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
         authMethod: SshAuthMethod.password,
-        password: 'testpass',
+        password: _sshPass,
       );
-      await container
-          .read(sessionListProvider.notifier)
-          .openSession(host, config);
-
-      for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
-        if (container
-            .read(sessionListProvider)
-            .isNotEmpty && container.read(sessionListProvider).first.connected) {
-          break;
-        }
-      }
+      await _connectWithRetry(tester, container, host, config);
 
       final terminal = container.read(sessionListProvider).first.terminal;
       await tester.pump(const Duration(seconds: 2));
@@ -294,6 +317,79 @@ void main() {
       expect(scaleAfter, greaterThan(scaleBefore),
           reason: 'Alt+wheel up should zoom in');
 
+      container.dispose();
+    }, timeout: const Timeout(Duration(minutes: 2)));
+  });
+
+  group('SFTP', () {
+    // Opens a session and returns the connected SftpService built on it.
+    // Shared by the list/download smoke tests so each doesn't re-handshake.
+    Future<SftpService> _connectSession(
+      WidgetTester tester,
+      ProviderContainer container,
+    ) async {
+      final host = Host(
+        id: 'test-sshd',
+        name: 'docker-sshd',
+        hostname: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
+        authType: AuthType.password,
+        password: _sshPass,
+      );
+      final config = SshConnectionConfig(
+        host: _sshHost,
+        port: _sshPort,
+        username: _sshUser,
+        authMethod: SshAuthMethod.password,
+        password: _sshPass,
+      );
+      final connected = await _connectWithRetry(tester, container, host, config);
+      expect(connected, isTrue, reason: 'SFTP smoke needs a connected session');
+      final sessions = container.read(sessionListProvider);
+      return SftpService(sessions.first.sshService);
+    }
+
+    testWidgets('listdir / returns the marker file', (tester) async {
+      final container = await _initApp();
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const PicshellApp(),
+      ));
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+
+      final sftp = await _connectSession(tester, container);
+      final entries = await sftp.listdir('/');
+
+      expect(entries, isNotEmpty, reason: 'root listing should not be empty');
+      expect(
+        entries.any((e) => e.name == 'picshell_sftp_marker.txt'),
+        isTrue,
+        reason: 'marker file from Dockerfile.sshd should be listed',
+      );
+
+      await sftp.close();
+      container.dispose();
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    testWidgets('download retrieves the marker file content', (tester) async {
+      final container = await _initApp();
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const PicshellApp(),
+      ));
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+
+      final sftp = await _connectSession(tester, container);
+      final tmp = await Directory.systemTemp.createTemp('picshell_sftp_');
+      final localPath = '${tmp.path}/marker.txt';
+      await sftp.download('/picshell_sftp_marker.txt', localPath);
+
+      final content = await File(localPath).readAsString();
+      expect(content.trim(), 'picshell-sftp-smoke');
+
+      await sftp.close();
+      await tmp.delete(recursive: true);
       container.dispose();
     }, timeout: const Timeout(Duration(minutes: 2)));
   });
