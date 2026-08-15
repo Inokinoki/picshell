@@ -78,6 +78,43 @@ String _trimSlashes(String s) => s.replaceAll(RegExp(r'^/+|/$'), '');
 String _trimTrailingSlash(String s) =>
     s.endsWith('/') && s.length > 1 ? s.substring(0, s.length - 1) : s;
 
+/// Awaits a streaming write whose failures surface only as unhandled zone
+/// errors. dartssh2 2.14.0's `SftpFileWriter` completes its `done` completer
+/// only on success or explicit `abort()`: a failed `writeBytes()` (connection
+/// lost, permission/quota) or an error in the source stream escapes as an
+/// unhandled zone error and `done` never completes, so a plain
+/// `await writer.done` would hang forever.
+///
+/// [start] is invoked inside `runZonedGuarded`, so any such unhandled error
+/// is captured into an error completer instead of leaking to the root zone.
+/// The write is then awaited as a race between [done] and the captured error.
+/// On error, [abort] is called (which stops the source stream and completes
+/// [done], letting the await unwind) and the original error is rethrown with
+/// its stack trace so callers can handle it as a normal exception.
+///
+/// Pure plumbing (no dartssh2 types), so it is unit-testable without an SFTP
+/// connection — see test/services/sftp_service_test.dart.
+Future<void> awaitZoneGuardedWrite({
+  required void Function() start,
+  required Future<void> Function() done,
+  required Future<void> Function() abort,
+}) async {
+  final errors = Completer<void>();
+  runZonedGuarded(start, (e, st) {
+    if (!errors.isCompleted) errors.completeError(e, st);
+  });
+  try {
+    await Future.any([done(), errors.future]);
+  } catch (e, st) {
+    try {
+      await abort();
+    } catch (_) {
+      // The writer may already be torn down; the original error matters.
+    }
+    Error.throwWithStackTrace(e, st);
+  }
+}
+
 /// Wraps an [SshService] to provide SFTP file operations. Lazily opens an
 /// SFTP subsystem on first use and transparently reopens it after the SSH
 /// client is replaced (e.g. on reconnect).
@@ -198,11 +235,14 @@ class SftpService implements SftpBrowserBackend {
     }
   }
 
-  /// Uploads [localPath] to [remotePath], streaming with a progress callback.
+  /// Uploads [localPath] to [remotePath], streaming with progress callbacks.
+  /// [onStart] fires once with the total byte count before the first chunk,
+  /// so callers can show a determinate progress bar.
   Future<void> upload(
     String localPath,
     String remotePath, {
     void Function(int total)? onProgress,
+    void Function(int total)? onStart,
   }) async {
     final sftp = await _client();
     final localFile = File(localPath);
@@ -225,14 +265,28 @@ class SftpService implements SftpBrowserBackend {
         sent += chunk.length;
         return chunk;
       });
-      await file.write(
-        stream,
-        onProgress: (acked) {
-          onProgress?.call(acked < sent ? acked : sent);
+      onStart?.call(size);
+      // SftpFile.write() starts piping immediately and returns the writer.
+      // dartssh2's writer only completes its `done` future on success or
+      // abort(); mid-upload errors escape as unhandled zone errors, so the
+      // write is awaited through awaitZoneGuardedWrite (see its doc) which
+      // bridges such errors into a normal exception and aborts the writer.
+      late final SftpFileWriter writer;
+      await awaitZoneGuardedWrite(
+        start: () {
+          writer = file.write(
+            stream,
+            onProgress: (acked) {
+              onProgress?.call(acked < sent ? acked : sent);
+            },
+          );
         },
+        done: () => writer.done,
+        abort: () => writer.abort(),
       );
       onProgress?.call(size);
     } finally {
+      // SftpFile.close() is idempotent, so this is safe after an abort.
       await file.close();
     }
   }

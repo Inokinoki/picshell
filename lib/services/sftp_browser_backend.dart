@@ -17,6 +17,7 @@ abstract class SftpBrowserBackend {
     String localPath,
     String remotePath, {
     void Function(int total)? onProgress,
+    void Function(int total)? onStart,
   });
   Future<void> mkdir(String path);
   Future<void> rmdir(String path);

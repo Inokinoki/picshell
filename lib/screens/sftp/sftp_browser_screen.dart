@@ -177,14 +177,23 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
       // Existence check is best-effort; proceed with the upload attempt.
     }
     _startTransfer('Uploading $baseName');
+    // The backend reports the file size via onStart, making the bar
+    // determinate; onProgress then reports bytes acked by the server.
+    int? total;
     try {
-      // Upload progress has no known total from the callback; the bar stays
-      // indeterminate until completion.
-      await backend.upload(source, remote, onProgress: (_) {});
+      await backend.upload(
+        source,
+        remote,
+        onStart: (t) {
+          total = t;
+          _updateTransfer(0, t);
+        },
+        onProgress: (n) => _updateTransfer(n, total),
+      );
       _refresh();
       if (mounted) _snack('Uploaded $baseName');
     } catch (e) {
-      _snack('Upload failed: ${sftpErrorMessage(e)}');
+      _snack(sftpErrorMessage(e));
     } finally {
       _endTransfer();
     }

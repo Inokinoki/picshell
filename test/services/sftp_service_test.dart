@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picshell/services/sftp_entry.dart';
@@ -133,6 +135,68 @@ void main() {
       expect(validateEntryName('../evil'), isNotNull);
       expect(validateEntryName('a\\b'), isNotNull);
       expect(validateEntryName('/abs'), isNotNull);
+    });
+  });
+
+  group('awaitZoneGuardedWrite', () {
+    test('completes normally when the write succeeds', () async {
+      final done = Completer<void>();
+      var aborted = false;
+      await awaitZoneGuardedWrite(
+        start: () => done.complete(),
+        done: () => done.future,
+        abort: () async => aborted = true,
+      );
+      expect(aborted, isFalse);
+    });
+
+    test('propagates an unhandled zone error instead of hanging', () async {
+      // Simulates dartssh2's SftpFileWriter: `done` never completes, but a
+      // failed writeBytes() escapes as an unhandled zone error.
+      final done = Completer<void>();
+      var aborted = false;
+      await expectLater(
+        awaitZoneGuardedWrite(
+          start: () {
+            scheduleMicrotask(() => throw StateError('write failed'));
+          },
+          done: () => done.future,
+          abort: () async {
+            aborted = true;
+            if (!done.isCompleted) done.complete();
+          },
+        ),
+        throwsA(isA<StateError>().having((e) => e.message, 'message', 'write failed')),
+      );
+      expect(aborted, isTrue);
+    });
+
+    test('propagates an async error thrown from a detached future', () async {
+      final done = Completer<void>();
+      await expectLater(
+        awaitZoneGuardedWrite(
+          start: () {
+            // Un-awaited future error → unhandled error in the guarded zone.
+            Future<void>.delayed(
+              const Duration(milliseconds: 10),
+            ).then((_) => throw ArgumentError('lost connection'));
+          },
+          done: () => done.future,
+          abort: () async => done.complete(),
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('rethrows even if abort itself fails', () async {
+      await expectLater(
+        awaitZoneGuardedWrite(
+          start: () => scheduleMicrotask(() => throw StateError('boom')),
+          done: () => Completer<void>().future,
+          abort: () async => throw StateError('already closed'),
+        ),
+        throwsA(isA<StateError>().having((e) => e.message, 'message', 'boom')),
+      );
     });
   });
 }
