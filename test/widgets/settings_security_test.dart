@@ -404,7 +404,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(Switch).first);
+      await tester.tap(find.descendant(
+        of: find.ancestor(
+            of: find.text('Require biometric unlock'),
+            matching: find.byType(SwitchListTile)),
+        matching: find.byType(Switch)));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Enable'));
       await tester.pumpAndSettle();

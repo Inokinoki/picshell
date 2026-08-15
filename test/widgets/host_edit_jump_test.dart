@@ -64,6 +64,8 @@ class _FakeHostStore implements HostStore {
   void setPassphrase(String passphrase) {}
   @override
   Future<void> reEncryptAll(String newPassphrase) async {}
+  @override
+  bool get hasUnmarkedSecrets => false;
 }
 
 Host _host(String id, {String? proxyHostId}) => Host(
