@@ -44,6 +44,8 @@ class _FakeHostStore implements HostStore {
   bool get isEncrypting => false;
   @override
   void setPassphrase(String passphrase) {}
+  @override
+  Future<void> reEncryptAll(String newPassphrase) async {}
 }
 
 SessionState _session({required bool connected, required String id}) {

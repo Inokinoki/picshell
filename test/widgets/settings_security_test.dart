@@ -147,7 +147,11 @@ void main() {
       final (_, backend, hostStore, container) = await _pump(tester);
       backend.authResult = false;
 
-      await tester.tap(find.byType(Switch).first);
+      await tester.tap(find.descendant(
+        of: find.ancestor(
+            of: find.text('Require biometric unlock'),
+            matching: find.byType(SwitchListTile)),
+        matching: find.byType(Switch)));
       await tester.pumpAndSettle();
       // Confirmation dialog first.
       await tester.tap(find.text('Enable'));
@@ -163,7 +167,11 @@ void main() {
     testWidgets('enable proceeds after successful verification', (tester) async {
       final (_, backend, hostStore, container) = await _pump(tester);
 
-      await tester.tap(find.byType(Switch).first);
+      await tester.tap(find.descendant(
+        of: find.ancestor(
+            of: find.text('Require biometric unlock'),
+            matching: find.byType(SwitchListTile)),
+        matching: find.byType(Switch)));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Enable'));
       await tester.pumpAndSettle();
@@ -182,7 +190,11 @@ void main() {
       await tester.pump();
       backend.authResult = false;
 
-      await tester.tap(find.byType(Switch).first);
+      await tester.tap(find.descendant(
+        of: find.ancestor(
+            of: find.text('Require biometric unlock'),
+            matching: find.byType(SwitchListTile)),
+        matching: find.byType(Switch)));
       await tester.pump();
       await tester.pumpAndSettle();
 
@@ -199,7 +211,11 @@ void main() {
       final (_, backend, hostStore, container) = await _pump(tester, startEnabled: true);
       // (enabled via _pump's runAsync above)
 
-      await tester.tap(find.byType(Switch).first);
+      await tester.tap(find.descendant(
+        of: find.ancestor(
+            of: find.text('Require biometric unlock'),
+            matching: find.byType(SwitchListTile)),
+        matching: find.byType(Switch)));
       await tester.pumpAndSettle();
 
       expect(backend.authCalls, 1);
@@ -218,7 +234,11 @@ void main() {
       hostStore.probeRequireBiometric =
           () => container.read(settingsProvider).requireBiometric;
 
-      await tester.tap(find.byType(Switch).first);
+      await tester.tap(find.descendant(
+        of: find.ancestor(
+            of: find.text('Require biometric unlock'),
+            matching: find.byType(SwitchListTile)),
+        matching: find.byType(Switch)));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Enable'));
       await tester.pumpAndSettle();
@@ -237,7 +257,11 @@ void main() {
       hostStore.reEncryptError =
           StateError('reEncryptAll aborted: 1 record(s) failed to decrypt');
 
-      await tester.tap(find.byType(Switch).first);
+      await tester.tap(find.descendant(
+        of: find.ancestor(
+            of: find.text('Require biometric unlock'),
+            matching: find.byType(SwitchListTile)),
+        matching: find.byType(Switch)));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Enable'));
       await tester.pumpAndSettle();
@@ -256,7 +280,11 @@ void main() {
           await _pump(tester, startEnabled: true);
       hostStore.reEncryptError = StateError('boom');
 
-      await tester.tap(find.byType(Switch).first);
+      await tester.tap(find.descendant(
+        of: find.ancestor(
+            of: find.text('Require biometric unlock'),
+            matching: find.byType(SwitchListTile)),
+        matching: find.byType(Switch)));
       await tester.pumpAndSettle();
 
       expect(container.read(settingsProvider).requireBiometric, isTrue);
