@@ -108,6 +108,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
           VirtualKeyboardBar(
             terminal: widget.terminal,
             controller: _terminalController,
+            keyboardBrightness: settings.palette.keyboardBrightness,
           ),
       ],
     );

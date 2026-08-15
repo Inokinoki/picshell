@@ -177,4 +177,57 @@ void main() {
     // The user's change won the palette race on disk too.
     expect(box.get('palette'), TerminalPalette.dracula.index);
   });
+
+  test('out-of-range persisted lineHeight is clamped once at load', () async {
+    final box = await Hive.openBox('settings');
+    await box.put('lineHeight', 47.0);
+
+    final n = SettingsNotifier(loadFromStorage: true);
+    await _waitFor(() => n.state.lineHeight != defaultLineHeight);
+
+    expect(n.state.lineHeight, 2.0);
+    // State and disk agree after the repair.
+    expect(box.get('lineHeight') as double, 2.0);
+  });
+
+  test('in-range persisted lineHeight below the minimum is clamped too', () async {
+    final box = await Hive.openBox('settings');
+    await box.put('lineHeight', 0.0);
+
+    final n = SettingsNotifier(loadFromStorage: true);
+    await _waitFor(() => n.state.lineHeight != defaultLineHeight);
+
+    expect(n.state.lineHeight, 1.0);
+    expect(box.get('lineHeight') as double, 1.0);
+  });
+
+  test('fontSize repair write does not clobber an in-flight user change', () async {
+    final box = await Hive.openBox('settings');
+    await box.put('fontSize', 99.0); // out-of-range: triggers a repair write
+
+    final n = SettingsNotifier(loadFromStorage: true);
+    // The fire-and-forget _load is still pending; the user sets a fresh
+    // (in-range) font size before the load's repair write lands.
+    n.setFontSize(11.0);
+    await _waitFor(() => box.get('fontSize') != null);
+    // Let any stray queued writes flush before asserting.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    // The user's fresh value survived on disk (the repair was suppressed).
+    expect(n.state.fontSize, 11.0);
+    expect(box.get('fontSize') as double, 11.0);
+  });
+
+  test('lineHeight repair write does not clobber an in-flight user change', () async {
+    final box = await Hive.openBox('settings');
+    await box.put('lineHeight', 47.0); // out-of-range: triggers a repair write
+
+    final n = SettingsNotifier(loadFromStorage: true);
+    n.setLineHeight(1.5);
+    await _waitFor(() => box.get('lineHeight') != null);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(n.state.lineHeight, 1.5);
+    expect(box.get('lineHeight') as double, 1.5);
+  });
 }

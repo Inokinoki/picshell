@@ -65,6 +65,8 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   static const _lineHeightKey = 'lineHeight';
   static const _minFontSize = 8.0;
   static const _maxFontSize = 28.0;
+  static const _minLineHeight = 1.0;
+  static const _maxLineHeight = 2.0;
 
   SettingsNotifier({bool loadFromStorage = true}) : super(const AppSettings()) {
     if (loadFromStorage) _load();
@@ -91,9 +93,18 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
         : defaultFontSize;
     // Clamp once at load so state and the persisted value agree (the sliders
     // clamp for display only; a stale out-of-range value would otherwise
-    // persist forever).
-    if (fontSize != rawFontSize) {
+    // persist forever). Guarded by the touched flag so the repair write never
+    // clobbers a value the user just set while the load was in flight.
+    if (fontSize != rawFontSize && !_touchedFontSize) {
       await box.put(_fontSizeKey, fontSize);
+    }
+
+    final lineHeight = rawLineHeight is num
+        ? rawLineHeight.toDouble().clamp(_minLineHeight, _maxLineHeight)
+        : defaultLineHeight;
+    // Same load-time clamp + on-disk repair as fontSize above.
+    if (lineHeight != rawLineHeight && !_touchedLineHeight) {
+      await box.put(_lineHeightKey, lineHeight);
     }
 
     final loaded = AppSettings(
@@ -110,9 +121,7 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
       ),
       fontFamily: rawFamily is String ? rawFamily : defaultFontFamily,
       fontSize: fontSize,
-      lineHeight: rawLineHeight is num
-          ? rawLineHeight.toDouble()
-          : defaultLineHeight,
+      lineHeight: lineHeight,
     );
 
     // Merge field-by-field: this fire-and-forget load can complete after the
