@@ -72,6 +72,38 @@ void main() {
       expect(SixelDecoder().decode(''), isNull);
       expect(SixelDecoder().decode('   '), isNull);
     });
+
+    test('register numbers above 65535 are skipped, not stored', () {
+      // A register definition far beyond the DEC 2^16-1 limit followed by a
+      // selection of it: the definition is skipped (falls back to white), and
+      // the palette map doesn't grow per hostile definition.
+      final img = SixelDecoder().decode(
+        '#99999999;2;0;100;0#99999999!2~',
+      )!;
+      expect(img.width, 2);
+      // White fallback: R=G=B=255, opaque.
+      expect(img.rgba[0], 255);
+      expect(img.rgba[1], 255);
+      expect(img.rgba[2], 255);
+      expect(img.rgba[3], 255);
+    });
+
+    test('register 65535 is still honoured', () {
+      final img = SixelDecoder().decode('#65535;2;100;0;0#65535!2~')!;
+      expect(img.rgba[0], 255); // red, not the white fallback
+      expect(img.rgba[1], 0);
+      expect(img.rgba[3], 255);
+    });
+
+    test('many distinct hostile register numbers decode without error', () {
+      final b = StringBuffer();
+      for (var n = 0; n < 200000; n++) {
+        b.write('#${100000 + n};2;0;0;0');
+      }
+      b.write('!2~');
+      final img = SixelDecoder().decode(b.toString())!;
+      expect(img.width, 2);
+    });
   });
 
   group('pngEncode', () {

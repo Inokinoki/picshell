@@ -33,10 +33,16 @@ class KittyGraphicsHandler {
   // Pending multi-chunk transfer.
   _Pending? _pending;
 
-  /// Cap on the reassembled payload, to bound memory on untrusted input
-  /// (a stream of m=1 chunks with no terminating m=0 would otherwise grow
-  /// the accumulator forever).
-  static const maxAccumulatedBytes = 64 * 1024 * 1024; // 64 MiB
+  /// Cap on the accumulated (base64) payload characters, to bound memory on
+  /// untrusted input (a stream of m=1 chunks with no terminating m=0 would
+  /// otherwise grow the accumulator forever). Chunks are base64-decoded as
+  /// they arrive, so the decoded image needs roughly this many bytes at most.
+  static const maxAccumulatedBytes = 16 * 1024 * 1024; // 16 MiB
+
+  /// A pending transfer that sees no further chunks for this long is dropped
+  /// (a lost m=0 must not pin its buffer forever). Checked lazily on the next
+  /// payload — no timer is armed.
+  static const pendingTimeout = Duration(seconds: 30);
 
   /// [payload] is the full APC content after `ESC _` (begins with `G`).
   void handle(String payload) {
@@ -48,13 +54,29 @@ class KittyGraphicsHandler {
 
     final params =
         _parseParams(paramsStr.startsWith('G') ? paramsStr.substring(1) : paramsStr);
-    final more = params['m'] == '1';
+    final more = params["m"] == "1";
+    
+
+    // Only transmit actions (`a=T`/`a=t`, or absent) carry an image payload.
+    // Anything else (e.g. a hostile `a=d` delete chunk with a payload) must
+    // not be emitted as a phantom image.
+    final action = params['a'];
+    final transmit = action == null || action == 'T' || action == 't';
 
     // A chunk carrying `a=` (a fresh transmit) while a transfer is already
     // pending means the previous transfer's m=0 was lost — drop the orphan so
     // it doesn't swallow this image into the wrong id/dimensions.
     if (params.containsKey('a') && _pending != null) {
       _pending = null;
+    }
+    if (!transmit) return;
+
+    // Lazily expire an orphaned pending transfer.
+    var pending = _pending;
+    if (pending != null &&
+        DateTime.now().difference(pending.lastChunkAt) > pendingTimeout) {
+      _pending = null;
+      pending = null;
     }
 
     if (more) {
@@ -64,33 +86,57 @@ class KittyGraphicsHandler {
         height: int.tryParse(params['v'] ?? ''),
         format: params['f'] ?? '100',
       );
-      if (_pending!.buffer.length + dataPart.length > maxAccumulatedBytes) {
-        // Oversized / runaway transfer — drop it entirely.
-        _pending = null;
-        return;
+      if (!_appendChunk(_pending!, dataPart)) {
+        _pending = null; // oversized / malformed — drop the transfer
       }
-      _pending!.buffer.write(dataPart);
       return;
     }
 
     // m==0 or absent: final (or single) chunk.
-    final pending = _pending;
     if (pending != null) {
-      if (pending.buffer.length + dataPart.length > maxAccumulatedBytes) {
+      if (!_appendChunk(pending, dataPart)) {
         _pending = null;
         return;
       }
-      pending.buffer.write(dataPart);
       _pending = null;
       _emit(pending);
     } else {
-      _emit(_Pending(
+      final single = _Pending(
         imageId: int.tryParse(params['i'] ?? ''),
         width: int.tryParse(params['s'] ?? ''),
         height: int.tryParse(params['v'] ?? ''),
         format: params['f'] ?? '100',
-      )..buffer.write(dataPart));
+      );
+      if (!_appendChunk(single, dataPart)) return;
+      _emit(single);
     }
+  }
+
+  /// Appends one chunk's base64 text to [p], decoding as we go (a partial
+  /// base64 quantum at the chunk boundary is carried over). Returns false if
+  /// the transfer is over the cap or the chunk is malformed base64.
+  bool _appendChunk(_Pending p, String data) {
+    p.lastChunkAt = DateTime.now();
+    if (data.isEmpty) return true;
+    if (p.b64Chars + data.length > maxAccumulatedBytes) return false;
+    p.b64Chars += data.length;
+    final s = p.b64Remainder + data;
+    p.b64Remainder = '';
+    // Decode only whole 4-char groups; carry the tail to the next chunk.
+    final rem = s.length % 4;
+    var decodable = s;
+    if (rem != 0) {
+      decodable = s.substring(0, s.length - rem);
+      p.b64Remainder = s.substring(s.length - rem);
+    }
+    if (decodable.isNotEmpty) {
+      try {
+        p.buffer.add(base64.decode(decodable));
+      } catch (_) {
+        return false; // malformed base64 — drop
+      }
+    }
+    return true;
   }
 
   void _emit(_Pending p) {
@@ -98,15 +144,16 @@ class KittyGraphicsHandler {
       onUnsupportedFormat?.call(p.format);
       return;
     }
-    final b64 = p.buffer.toString();
-    if (b64.isEmpty) return;
-    Uint8List bytes;
-    try {
-      bytes = base64.decode(b64);
-    } catch (_) {
-      return; // malformed base64 — drop
+    if (p.b64Remainder.isNotEmpty) {
+      try {
+        p.buffer.add(base64.decode(p.b64Remainder));
+      } catch (_) {
+        return; // malformed base64 — drop
+      }
+      p.b64Remainder = '';
     }
-    onImage(bytes, p.imageId, p.width, p.height);
+    if (p.buffer.isEmpty) return;
+    onImage(p.buffer.toBytes(), p.imageId, p.width, p.height);
   }
 
   /// Parses `k=v,k=v` into a map. Entries without `=` are skipped.
@@ -128,7 +175,21 @@ class _Pending {
   final int? width;
   final int? height;
   final String format;
-  final StringBuffer buffer = StringBuffer();
+
+  /// Decoded bytes so far (base64 is decoded per chunk as it arrives).
+  final BytesBuilder buffer = BytesBuilder(copy: false);
+
+  /// Base64 characters carried from the previous chunk (a partial 4-char
+  /// quantum split across a chunk boundary).
+  String b64Remainder = '';
+
+  /// Total base64 characters seen, for cap enforcement.
+  int b64Chars = 0;
+
+  /// When the last chunk of this transfer arrived, for orphan expiry. A
+  /// legitimately slow but active transfer must not be discarded mid-flight,
+  /// so the timeout is measured from the last activity, not the start.
+  DateTime lastChunkAt = DateTime.now();
 
   _Pending({this.imageId, this.width, this.height, this.format = '100'});
 }
