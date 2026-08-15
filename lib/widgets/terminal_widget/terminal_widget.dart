@@ -179,8 +179,11 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
   void _applyHighlights() {
     _disposeHighlights();
     final buffer = widget.terminal.buffer;
-    final bg = TerminalThemes.defaultTheme.searchHitBackground;
-    final bgCur = TerminalThemes.defaultTheme.searchHitBackgroundCurrent;
+    // Follow the selected palette's theme so a future scheme can override
+    // the search-hit colours (they are currently shared constants).
+    final theme = ref.read(settingsProvider).palette.theme;
+    final bg = theme.searchHitBackground;
+    final bgCur = theme.searchHitBackgroundCurrent;
     for (var i = 0; i < _result.matches.length; i++) {
       final m = _result.matches[i];
       // Skip matches whose line has scrolled out of the buffer entirely.
