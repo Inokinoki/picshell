@@ -63,6 +63,13 @@ enum TerminalPalette {
   /// the settings UI (avoids materialising the full palette in the tile).
   Color get previewBackground => theme.background;
   Color get previewForeground => theme.foreground;
+
+  /// Whether this palette's background is light. Drives the on-screen
+  /// keyboard appearance so a light scheme (e.g. Solarized Light) gets a
+  /// light keyboard instead of the renderer's dark default.
+  Brightness get keyboardBrightness => theme.background.computeLuminance() > 0.5
+      ? Brightness.light
+      : Brightness.dark;
 }
 
 /// Search-highlight colours shared by every scheme. Kept consistent so the
