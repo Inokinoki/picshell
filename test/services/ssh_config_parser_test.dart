@@ -91,6 +91,60 @@ Host h
       expect(hosts.first.forwards[1].localPort, 1080);
     });
 
+    test('parses RemoteForward bind-address one-arg form', () {
+      const text = '''
+Host h
+  RemoteForward 0.0.0.0:8080:intranet.example:443
+''';
+      final hosts = SshConfigParser.parse(text);
+      expect(hosts.first.forwards.length, 1);
+      final f = hosts.first.forwards.first;
+      expect(f.type, ForwardType.remote);
+      expect(f.localHost, '0.0.0.0');
+      expect(f.localPort, 8080);
+      expect(f.remoteHost, 'intranet.example');
+      expect(f.remotePort, 443);
+    });
+
+    test('parses RemoteForward bind-address multi-arg form', () {
+      const text = '''
+Host h
+  RemoteForward localhost 8080 intranet.example 443
+''';
+      final hosts = SshConfigParser.parse(text);
+      expect(hosts.first.forwards.length, 1);
+      final f = hosts.first.forwards.first;
+      expect(f.type, ForwardType.remote);
+      expect(f.localHost, 'localhost');
+      expect(f.localPort, 8080);
+      expect(f.remoteHost, 'intranet.example');
+      expect(f.remotePort, 443);
+    });
+
+    test('parses LocalForward bind-address one-arg form', () {
+      const text = '''
+Host h
+  LocalForward 0.0.0.0:8080:db:5432
+''';
+      final hosts = SshConfigParser.parse(text);
+      final f = hosts.first.forwards.single;
+      expect(f.localHost, '0.0.0.0');
+      expect(f.localPort, 8080);
+      expect(f.remoteHost, 'db');
+      expect(f.remotePort, 5432);
+    });
+
+    test('skips listen-only RemoteForward', () {
+      const text = '''
+Host h
+  RemoteForward 8080
+  RemoteForward 0.0.0.0:9090
+  RemoteForward 19999
+''';
+      final hosts = SshConfigParser.parse(text);
+      expect(hosts.first.forwards, isEmpty);
+    });
+
     test('parses ProxyJump and IdentityFile', () {
       const text = '''
 Host target

@@ -122,26 +122,69 @@ class SshConfigParser {
   /// OpenSSH accepts two spellings for local/remote forwards:
   ///   `LocalForward 8080 db:5432`
   ///   `LocalForward 8080 db 5432`
+  /// Both spellings accept an optional bind-address prefix on the listener
+  /// side:
+  ///   `RemoteForward 0.0.0.0:8080:host:port`
+  ///   `RemoteForward 0.0.0.0 8080 host port`
+  /// The bind address is stored in [ForwardRule.localHost].
+  ///
+  /// Listen-only forms (`RemoteForward 8080`, where the dial-back destination
+  /// is chosen later by the connecting process) cannot be expressed as a
+  /// picshell rule — the runtime needs a concrete remote target to dial — so
+  /// they are skipped rather than imported as rules that would later fail to
+  /// start. (Naive `:`-splitting: bracketed IPv6 literals are not supported.)
   static void _addForward(ParsedHost host, String args, ForwardType type) {
     final parts = args.split(RegExp(r'\s+'));
-    if (parts.isEmpty) return;
-    final localPort = int.tryParse(parts[0]);
-    if (localPort == null) return;
 
+    var localHost = '127.0.0.1';
+    int? localPort;
     String? remoteHost;
     int? remotePort;
-    if (parts.length >= 2 && parts[1].contains(':')) {
-      final hp = parts[1].split(':');
-      remoteHost = hp.isNotEmpty ? hp[0] : null;
-      remotePort = hp.length >= 2 ? int.tryParse(hp[1]) : null;
-    } else if (parts.length >= 3) {
-      remoteHost = parts[1];
-      remotePort = int.tryParse(parts[2]);
+
+    if (parts.length == 1) {
+      // One-argument form: [bind:]port:host:port / port:host:port.
+      final segs = parts[0].split(':');
+      if (segs.length == 4) {
+        if (segs[0].isNotEmpty) localHost = segs[0];
+        localPort = int.tryParse(segs[1]);
+        remoteHost = segs[2];
+        remotePort = int.tryParse(segs[3]);
+      } else if (segs.length == 3) {
+        localPort = int.tryParse(segs[0]);
+        remoteHost = segs[1];
+        remotePort = int.tryParse(segs[2]);
+      } else {
+        return; // listen-only or unparsable
+      }
+    } else {
+      // Multi-argument form: [bind] port [host port] / port host:port.
+      var i = 0;
+      if (parts.length >= 4 &&
+          int.tryParse(parts[0]) == null &&
+          int.tryParse(parts[1]) != null) {
+        localHost = parts[0];
+        i = 1;
+      }
+      localPort = int.tryParse(parts[i]);
+      if (parts.length >= i + 3) {
+        remoteHost = parts[i + 1];
+        remotePort = int.tryParse(parts[i + 2]);
+      } else if (parts.length == i + 2 && parts[i + 1].contains(':')) {
+        final hp = parts[i + 1].split(':');
+        remoteHost = hp.isNotEmpty ? hp[0] : null;
+        remotePort = hp.length >= 2 ? int.tryParse(hp[1]) : null;
+      } else {
+        return; // listen-only or unparsable
+      }
     }
+
+    if (localPort == null) return;
+    if (remoteHost == null || remotePort == null) return;
 
     host.forwards.add(ForwardRule(
       id: _uuid.v4(),
       type: type,
+      localHost: localHost,
       localPort: localPort,
       remoteHost: remoteHost,
       remotePort: remotePort,

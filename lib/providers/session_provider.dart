@@ -106,6 +106,14 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
           'Jump host ${host.proxyHostId} no longer exists',
         );
       }
+      // Nested jumps (jump-via-jump) are not exposed in the UI; refuse
+      // clearly instead of silently connecting directly to the jump host.
+      if (proxyHost.proxyHostId != null) {
+        throw StateError(
+          "Jump host '${proxyHost.name}' itself routes via a jump host, "
+          'which is not supported. Clear its jump setting first.',
+        );
+      }
       proxyConfig = _withTofu(_configFromHost(proxyHost));
     }
     final verifiedConfig = _withTofu(SshConnectionConfig(

@@ -106,18 +106,31 @@ class SshService {
   /// Starts [rule] on the current client. Returns the actually bound port
   /// (which may differ from [ForwardRule.localPort] when 0 was requested).
   /// Throws if the client is not connected or the rule is already running.
+  /// Concurrent calls for the same rule id are single-flighted: both await
+  /// the same bind and get the same port instead of racing to bind twice.
   Future<int> startForward(ForwardRule rule) async {
     final client = _client;
     if (client == null) {
       throw StateError('Cannot start forward: SSH client not connected');
     }
-    if (_activeForwards.containsKey(rule.id)) {
-      return _activeForwards[rule.id]!.boundPort;
+    final existing = _activeForwards[rule.id];
+    if (existing != null) return existing.boundPort;
+    final pending = _pendingForwards[rule.id];
+    if (pending != null) return (await pending).boundPort;
+
+    final future = ActiveForward.bind(client, rule);
+    _pendingForwards[rule.id] = future;
+    try {
+      final forward = await future;
+      _activeForwards[rule.id] = forward;
+      return forward.boundPort;
+    } finally {
+      _pendingForwards.remove(rule.id);
     }
-    final forward = await ActiveForward.bind(client, rule);
-    _activeForwards[rule.id] = forward;
-    return forward.boundPort;
   }
+
+  /// In-flight [startForward] binds keyed by rule id, for single-flight.
+  final Map<String, Future<ActiveForward>> _pendingForwards = {};
 
   /// Stops a running forward by its rule id. No-op if not running.
   Future<void> stopForward(String ruleId) async {
@@ -157,9 +170,17 @@ class SshService {
         final proxy = config.proxyConfig!;
         final jumpSocket = await SSHSocket.connect(proxy.host, proxy.port);
         final jumpClient = _buildClient(jumpSocket, proxy);
-        await jumpClient.authenticated;
-        _jumpClient = jumpClient;
-        socket = await jumpClient.forwardLocal(config.host, config.port);
+        try {
+          await jumpClient.authenticated;
+          _jumpClient = jumpClient;
+          socket = await jumpClient.forwardLocal(config.host, config.port);
+        } catch (_) {
+          // Never leak an authenticated (or half-open) jump connection when
+          // the target is unreachable or the shell handshake fails.
+          if (_jumpClient == jumpClient) _jumpClient = null;
+          jumpClient.close();
+          rethrow;
+        }
       } else {
         socket = await SSHSocket.connect(config.host, config.port);
       }
@@ -224,10 +245,21 @@ class SshService {
           onVerifyHostKey: config.onVerifyHostKey,
         );
       case SshAuthMethod.key:
-        final keyPair = SSHKeyPair.fromPem(
-          config.privateKeyPem!,
-          config.passphrase,
-        );
+        final List<SSHKeyPair> keyPair;
+        try {
+          keyPair = SSHKeyPair.fromPem(
+            config.privateKeyPem!,
+            config.passphrase,
+          );
+        } catch (e) {
+          throw Exception(
+            'Failed to load private key for ${config.host}:${config.port}: '
+            '$e. This usually means the PEM is not a valid OpenSSH private '
+            'key, or the passphrase is wrong or missing. Re-import the key '
+            '(with its passphrase) or use a different auth method for this '
+            'host.',
+          );
+        }
         return SSHClient(
           socket,
           username: config.username,
@@ -260,6 +292,7 @@ class SshService {
       forward.stop();
     }
     _activeForwards.clear();
+    _pendingForwards.clear();
     _session?.close();
     _client?.close();
     _jumpClient?.close();

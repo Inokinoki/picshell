@@ -54,10 +54,25 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
   Widget build(BuildContext context) {
     final keys = ref.watch(keyListProvider);
     final hosts = ref.watch(hostListProvider);
-    final jumpChoices = hosts.where((h) => h.id != widget.hostId).toList();
-    final jumpHost = _proxyHostId == null
+    // Jump-via-jump is not supported: hide hosts that route through another
+    // jump host so they can't be picked as a proxy here.
+    final jumpChoices = hosts
+        .where((h) => h.id != widget.hostId && h.proxyHostId == null)
+        .toList();
+    // Likewise, this host cannot gain a jump host of its own while other
+    // hosts already route through it — that would create a jump chain.
+    final isUsedAsJumpHost = _isUsedAsJumpHost(hosts);
+    // If the saved selection is no longer offered (the chosen jump host now
+    // routes via another jump itself, or this host became someone's jump),
+    // render null instead of an orphaned value — DropdownButton asserts that
+    // its value matches exactly one item.
+    final selectionOrphaned = _proxyHostId != null &&
+        (isUsedAsJumpHost ||
+            jumpChoices.every((h) => h.id != _proxyHostId));
+    final effectiveProxyHostId = selectionOrphaned ? null : _proxyHostId;
+    final jumpHost = effectiveProxyHostId == null
         ? null
-        : hosts.where((h) => h.id == _proxyHostId).firstOrNull;
+        : hosts.where((h) => h.id == effectiveProxyHostId).firstOrNull;
 
     return Scaffold(
       appBar: AppBar(
@@ -184,21 +199,51 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
                   labelText: 'Connect via (ProxyJump, ssh -J)',
                   border: OutlineInputBorder(),
                 ),
-                value: _proxyHostId,
-                items: [
-                  const DropdownMenuItem<String?>(
-                    value: null,
-                    child: Text('Direct connection'),
-                  ),
-                  ...jumpChoices.map(
-                    (h) => DropdownMenuItem<String?>(
-                      value: h.id,
-                      child: Text('${h.name} (${h.username}@${h.hostname}:${h.port})'),
+                value: effectiveProxyHostId,
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Direct connection'),
+                    ),
+                    ...jumpChoices.map(
+                      (h) => DropdownMenuItem<String?>(
+                        value: h.id,
+                        child: Text('${h.name} (${h.username}@${h.hostname}:${h.port})'),
+                      ),
+                    ),
+                  ],
+                  onChanged: (id) => setState(() => _proxyHostId = id),
+                ),
+                // Hosts routed via another jump host are hidden above; note
+                // it so the list shrinking isn't mysterious.
+                if (hosts.any((h) =>
+                    h.id != widget.hostId && h.proxyHostId != null))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Hosts that themselves route via a jump host cannot be '
+                      'used as a jump host.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                ],
-                onChanged: (id) => setState(() => _proxyHostId = id),
-              ),
+                if (selectionOrphaned)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'The previously selected jump host is no longer '
+                      'available (it now routes via another jump host, or '
+                      'this host is itself used as a jump host); the '
+                      'connection falls back to direct unless you pick a '
+                      'different jump host.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
               if (jumpHost != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
@@ -336,6 +381,12 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
     );
   }
 
+  /// Whether another saved host routes through the host being edited (i.e.
+  /// this host is someone's jump host). Such a host must not gain a jump host
+  /// of its own — picshell does not support jump chains.
+  bool _isUsedAsJumpHost(List<Host> hosts) => widget.hostId != null &&
+      hosts.any((h) => h.proxyHostId == widget.hostId);
+
   void _save() {
     if (!_formKey.currentState!.validate()) return;
     if (_authType == AuthType.key && _selectedKeyId == null) {
@@ -350,9 +401,18 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
         _authType == AuthType.password ? _passwordController.text : null;
     final keyId = _authType == AuthType.key ? _selectedKeyId : null;
     final forwards = List<ForwardRule>.of(_forwards);
+    // Never persist an orphaned or chain-forming jump selection (see build).
+    final hosts = ref.read(hostListProvider);
+    final offeredIds = hosts
+        .where((h) => h.id != widget.hostId && h.proxyHostId == null)
+        .map((h) => h.id)
+        .toSet();
+    final proxyHostId = (_isUsedAsJumpHost(hosts) ||
+            !offeredIds.contains(_proxyHostId))
+        ? null
+        : _proxyHostId;
 
     if (_isEditing) {
-      final hosts = ref.read(hostListProvider);
       final host = hosts.firstWhere((h) => h.id == widget.hostId);
       host.name = _nameController.text;
       host.hostname = _hostController.text;
@@ -361,7 +421,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
       host.authType = _authType;
       host.password = password;
       host.keyId = keyId;
-      host.proxyHostId = _proxyHostId;
+      host.proxyHostId = proxyHostId;
       host.forwards = forwards;
       notifier.update(host);
     } else {
@@ -374,7 +434,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
         authType: _authType,
         password: password,
         keyId: keyId,
-        proxyHostId: _proxyHostId,
+        proxyHostId: proxyHostId,
         forwards: forwards,
       );
       notifier.add(host);
@@ -408,6 +468,7 @@ class _ForwardEditorDialog extends StatefulWidget {
 class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
   final _formKey = GlobalKey<FormState>();
   final _localPortController = TextEditingController();
+  final _bindHostController = TextEditingController(text: '127.0.0.1');
   final _remoteHostController = TextEditingController();
   final _remotePortController = TextEditingController();
   ForwardType _type = ForwardType.local;
@@ -425,6 +486,7 @@ class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
     if (e != null) {
       _type = e.type;
       _localPortController.text = e.localPort.toString();
+      _bindHostController.text = e.localHost;
       _remoteHostController.text = e.remoteHost ?? '';
       _remotePortController.text = e.remotePort?.toString() ?? '';
       _autoStart = e.autoStart;
@@ -470,6 +532,18 @@ class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
               validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
             ),
             if (_needsRemote) ...[
+              if (_type == ForwardType.remote)
+                TextFormField(
+                  controller: _bindHostController,
+                  decoration: const InputDecoration(
+                    labelText: 'Remote bind address (on server)',
+                    helperText:
+                        "Address the SSH server listens on. '127.0.0.1' "
+                        "(default, like OpenSSH without GatewayPorts) or "
+                        "'0.0.0.0' to expose on all server interfaces.",
+                  ),
+                  validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                ),
               TextFormField(
                 controller: _remoteHostController,
                 decoration: InputDecoration(
@@ -524,6 +598,9 @@ class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
     final rule = ForwardRule(
       id: widget.existing?.id ?? _uuid.v4(),
       type: _type,
+      localHost: _type == ForwardType.remote
+          ? _bindHostController.text.trim()
+          : '127.0.0.1',
       localPort: localPort,
       remoteHost: _needsRemote ? _remoteHostController.text : null,
       remotePort: remotePort,
@@ -535,6 +612,7 @@ class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
   @override
   void dispose() {
     _localPortController.dispose();
+    _bindHostController.dispose();
     _remoteHostController.dispose();
     _remotePortController.dispose();
     super.dispose();
