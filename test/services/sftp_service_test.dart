@@ -41,9 +41,10 @@ void main() {
     test('trailing slash trimmed before parent', () {
       expect(parentPath('/a/b/'), '/a');
     });
-    test('relative without slash resolves to root', () {
-      // '.' has no '/', so lastIndexOf returns -1 → treated as top-level.
-      expect(parentPath('.'), '/');
+    test('relative without slash is returned unchanged', () {
+      // '.' has no '/', so it has no parent.
+      expect(parentPath('.'), '.');
+      expect(parentPath('a'), 'a');
     });
   });
 

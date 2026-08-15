@@ -20,16 +20,18 @@ String joinPath(String base, String child) {
   return '${_trimTrailingSlash(base)}/${_trimSlashes(child)}';
 }
 
-/// Returns the parent directory of [path], or '/' at the root.
+/// Returns the parent directory of [path], or '/' at the root. A relative
+/// path with no '/' has no parent, so it is returned unchanged.
 /// Pure top-level function for testability.
 ///
 /// Examples: parentPath('/a/b') → '/a'; parentPath('/a') → '/';
-/// parentPath('/') → '/'; parentPath('.') → '.'.
+/// parentPath('/') → '/'; parentPath('.') → '.'; parentPath('a') → 'a'.
 String parentPath(String path) {
   if (path == '/' || path.isEmpty) return '/';
   final trimmed = _trimTrailingSlash(path);
   final lastSlash = trimmed.lastIndexOf('/');
-  if (lastSlash <= 0) return '/';
+  if (lastSlash < 0) return trimmed;
+  if (lastSlash == 0) return '/';
   return trimmed.substring(0, lastSlash);
 }
 

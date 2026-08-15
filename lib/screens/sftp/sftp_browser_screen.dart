@@ -42,6 +42,9 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
   List<SftpEntry> _entries = [];
   bool _loading = true;
   String? _error;
+  // Active transfer progress UI. Null when idle; shown as a slim bottom bar.
+  String? _transferLabel;
+  double? _transferValue; // null → indeterminate progress
 
   @override
   void initState() {
@@ -173,32 +176,68 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
     } catch (_) {
       // Existence check is best-effort; proceed with the upload attempt.
     }
-    _snack('Uploading $baseName…');
+    _startTransfer('Uploading $baseName');
     try {
-      await backend.upload(source, remote);
+      // Upload progress has no known total from the callback; the bar stays
+      // indeterminate until completion.
+      await backend.upload(source, remote, onProgress: (_) {});
       _refresh();
       if (mounted) _snack('Uploaded $baseName');
     } catch (e) {
       _snack('Upload failed: ${sftpErrorMessage(e)}');
+    } finally {
+      _endTransfer();
     }
   }
 
   Future<void> _download(SftpEntry entry) async {
-    final target = await _localFiles.pickDownload(entry.name);
-    if (target == null) return;
-    final remote = joinPath(_currentPath, entry.name);
-    _snack('Downloading ${entry.name}…');
+    // Guard before opening the picker so "Not connected" comes first.
     final backend = _backend;
     if (backend == null) {
       _snack('Not connected');
       return;
     }
+    final target = await _localFiles.pickDownload(entry.name);
+    if (target == null) return;
+    final remote = joinPath(_currentPath, entry.name);
+    _startTransfer('Downloading ${entry.name}');
     try {
-      await backend.download(remote, target);
+      await backend.download(remote, target, onProgress: (n) {
+        _updateTransfer(n, entry.size);
+      });
       if (mounted) _snack('Saved to $target');
     } catch (e) {
       _snack('Download failed: ${sftpErrorMessage(e)}');
+    } finally {
+      _endTransfer();
     }
+  }
+
+  /// Shows the slim bottom progress bar with [label] (indeterminate until a
+  /// progress event with a known total arrives).
+  void _startTransfer(String label) {
+    if (!mounted) return;
+    setState(() {
+      _transferLabel = label;
+      _transferValue = null;
+    });
+  }
+
+  void _updateTransfer(int transferred, int? total) {
+    if (!mounted || _transferLabel == null) return;
+    setState(() {
+      _transferValue = (total != null && total > 0)
+          ? (transferred / total).clamp(0.0, 1.0)
+          : null;
+    });
+  }
+
+  void _endTransfer() {
+    if (!mounted) return;
+    setState(() {
+      _transferLabel = null;
+      _transferValue = null;
+    });
   }
 
   Future<void> _rename(SftpEntry entry) async {
@@ -299,7 +338,41 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
   @override
   Widget build(BuildContext context) {
     final atRoot = _currentPath == '/';
+    final transferLabel = _transferLabel;
     return Scaffold(
+      bottomNavigationBar: transferLabel == null
+          ? null
+          : SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LinearProgressIndicator(value: _transferValue),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 16,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            transferLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                        if (_transferValue != null)
+                          Text(
+                            '${(_transferValue! * 100).round()}%',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_upward),

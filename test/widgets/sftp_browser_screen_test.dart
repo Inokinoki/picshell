@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picshell/screens/sftp/sftp_browser_screen.dart';
@@ -16,6 +18,10 @@ class _FakeBackend implements SftpBrowserBackend {
   // to decide whether to ask for overwrite confirmation.
   final Set<String> existingPaths = {};
   bool failAbsolute = false;
+  // When set, download/upload pause on this gate between progress events so
+  // tests can observe the in-flight progress UI.
+  Completer<void>? downloadGate;
+  Completer<void>? uploadGate;
 
   _FakeBackend() {
     _dirs['/home/user'] = [
@@ -47,11 +53,17 @@ class _FakeBackend implements SftpBrowserBackend {
   @override
   Future<void> download(remotePath, localPath, {onProgress}) async {
     calls.add('download:$remotePath->$localPath');
+    onProgress?.call(512);
+    if (downloadGate != null) await downloadGate!.future;
+    onProgress?.call(1024);
   }
 
   @override
   Future<void> upload(localPath, remotePath, {onProgress}) async {
     calls.add('upload:$localPath->$remotePath');
+    onProgress?.call(16);
+    if (uploadGate != null) await uploadGate!.future;
+    onProgress?.call(32);
     // Reflect into the dir so a refresh shows it.
     final dir = remotePath.substring(0, remotePath.lastIndexOf('/'));
     (_dirs.putIfAbsent(
@@ -195,6 +207,75 @@ void main() {
       backend.calls,
       contains('download:/home/user/readme.txt->/fake/readme.txt'),
     );
+  });
+
+  testWidgets('download shows progress bar with percentage', (tester) async {
+    final backend = _FakeBackend()..downloadGate = Completer<void>();
+    await tester.pumpWidget(
+      _wrap(
+        SftpBrowserScreen(
+          sessionId: 's1',
+          backend: backend,
+          localFiles: _FakeLocalFiles(downloadTarget: '/fake/readme.txt'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('readme.txt'));
+    await tester.pump();
+
+    // In-flight: label + 50% (512 of 1024 bytes) against a determinate bar.
+    expect(find.text('Downloading readme.txt'), findsOneWidget);
+    expect(find.text('50%'), findsOneWidget);
+    final bar = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
+    );
+    expect(bar.value, closeTo(0.5, 0.001));
+
+    backend.downloadGate!.complete();
+    await tester.pumpAndSettle();
+
+    // Done: bar dismissed and success feedback shown.
+    expect(find.text('Downloading readme.txt'), findsNothing);
+    expect(find.text('Saved to /fake/readme.txt'), findsOneWidget);
+  });
+
+  testWidgets('upload shows progress bar and clears it on completion', (
+    tester,
+  ) async {
+    final backend = _FakeBackend()..uploadGate = Completer<void>();
+    await tester.pumpWidget(
+      _wrap(
+        SftpBrowserScreen(
+          sessionId: 's1',
+          backend: backend,
+          localFiles: _FakeLocalFiles(uploadSource: '/fake/other.bin'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Upload Here'));
+    await tester.pump();
+
+    // In-flight: label is shown (indeterminate — local size unknown on a
+    // nonexistent test path).
+    expect(find.text('Uploading other.bin'), findsOneWidget);
+    expect(
+      tester
+          .widget<LinearProgressIndicator>(
+            find.byType(LinearProgressIndicator),
+          )
+          .value,
+      isNull,
+    );
+
+    backend.uploadGate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Uploading other.bin'), findsNothing);
+    expect(find.text('Uploaded other.bin'), findsOneWidget);
   });
 
   testWidgets('delete on a file calls remove', (tester) async {

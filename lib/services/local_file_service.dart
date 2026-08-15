@@ -30,21 +30,6 @@ Future<String?> pickUploadSource() async {
   return path;
 }
 
-/// Picks/computes the local destination for a download given a suggested
-/// [fileName]. Desktop prompts via saveFile; mobile writes into the download
-/// directory with that name.
-Future<String?> pickDownloadTarget(String fileName) async {
-  if (isMobilePlatform) {
-    // saveFile support is unreliable on iOS/Android; write directly into the
-    // app-visible download/docs directory.
-    final dir = await defaultDownloadDir();
-    return joinLocalPath(dir, fileName);
-  }
-  // Desktop: let the user choose location and rename.
-  final chosen = await FilePicker.platform.saveFile(fileName: fileName);
-  return chosen;
-}
-
 /// Joins a local directory path with a filename using the platform separator.
 /// Pure top-level function so join logic is unit-testable.
 String joinLocalPath(String dir, String name) {
