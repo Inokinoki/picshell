@@ -92,8 +92,11 @@ class ForwardRule extends HiveObject {
       case ForwardType.local:
         return '-L $localPort:${remoteHost ?? '?'}:${remotePort ?? '?'}';
       case ForwardType.remote:
-        final bindHost =
-            localHost == '127.0.0.1' ? '' : '$localHost:';
+        final bindHost = (localHost == '127.0.0.1' ||
+                localHost == 'localhost' ||
+                localHost == '::1')
+            ? ''
+            : '$localHost:';
         return '-R $bindHost$localPort:${remoteHost ?? '?'}:${remotePort ?? '?'}';
       case ForwardType.socks:
         return '-D $localPort';

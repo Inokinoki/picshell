@@ -59,9 +59,20 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
     final jumpChoices = hosts
         .where((h) => h.id != widget.hostId && h.proxyHostId == null)
         .toList();
-    final jumpHost = _proxyHostId == null
+    // Likewise, this host cannot gain a jump host of its own while other
+    // hosts already route through it — that would create a jump chain.
+    final isUsedAsJumpHost = _isUsedAsJumpHost(hosts);
+    // If the saved selection is no longer offered (the chosen jump host now
+    // routes via another jump itself, or this host became someone's jump),
+    // render null instead of an orphaned value — DropdownButton asserts that
+    // its value matches exactly one item.
+    final selectionOrphaned = _proxyHostId != null &&
+        (isUsedAsJumpHost ||
+            jumpChoices.every((h) => h.id != _proxyHostId));
+    final effectiveProxyHostId = selectionOrphaned ? null : _proxyHostId;
+    final jumpHost = effectiveProxyHostId == null
         ? null
-        : hosts.where((h) => h.id == _proxyHostId).firstOrNull;
+        : hosts.where((h) => h.id == effectiveProxyHostId).firstOrNull;
 
     return Scaffold(
       appBar: AppBar(
@@ -188,7 +199,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
                   labelText: 'Connect via (ProxyJump, ssh -J)',
                   border: OutlineInputBorder(),
                 ),
-                value: _proxyHostId,
+                value: effectiveProxyHostId,
                   items: [
                     const DropdownMenuItem<String?>(
                       value: null,
@@ -215,6 +226,21 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
                       style: TextStyle(
                         fontSize: 11,
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                if (selectionOrphaned)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'The previously selected jump host is no longer '
+                      'available (it now routes via another jump host, or '
+                      'this host is itself used as a jump host); the '
+                      'connection falls back to direct unless you pick a '
+                      'different jump host.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.error,
                       ),
                     ),
                   ),
@@ -355,6 +381,12 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
     );
   }
 
+  /// Whether another saved host routes through the host being edited (i.e.
+  /// this host is someone's jump host). Such a host must not gain a jump host
+  /// of its own — picshell does not support jump chains.
+  bool _isUsedAsJumpHost(List<Host> hosts) => widget.hostId != null &&
+      hosts.any((h) => h.proxyHostId == widget.hostId);
+
   void _save() {
     if (!_formKey.currentState!.validate()) return;
     if (_authType == AuthType.key && _selectedKeyId == null) {
@@ -369,9 +401,18 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
         _authType == AuthType.password ? _passwordController.text : null;
     final keyId = _authType == AuthType.key ? _selectedKeyId : null;
     final forwards = List<ForwardRule>.of(_forwards);
+    // Never persist an orphaned or chain-forming jump selection (see build).
+    final hosts = ref.read(hostListProvider);
+    final offeredIds = hosts
+        .where((h) => h.id != widget.hostId && h.proxyHostId == null)
+        .map((h) => h.id)
+        .toSet();
+    final proxyHostId = (_isUsedAsJumpHost(hosts) ||
+            !offeredIds.contains(_proxyHostId))
+        ? null
+        : _proxyHostId;
 
     if (_isEditing) {
-      final hosts = ref.read(hostListProvider);
       final host = hosts.firstWhere((h) => h.id == widget.hostId);
       host.name = _nameController.text;
       host.hostname = _hostController.text;
@@ -380,7 +421,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
       host.authType = _authType;
       host.password = password;
       host.keyId = keyId;
-      host.proxyHostId = _proxyHostId;
+      host.proxyHostId = proxyHostId;
       host.forwards = forwards;
       notifier.update(host);
     } else {
@@ -393,7 +434,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
         authType: _authType,
         password: password,
         keyId: keyId,
-        proxyHostId: _proxyHostId,
+        proxyHostId: proxyHostId,
         forwards: forwards,
       );
       notifier.add(host);

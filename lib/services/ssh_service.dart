@@ -252,9 +252,10 @@ class SshService {
         } catch (e) {
           throw Exception(
             'Failed to load private key for ${config.host}:${config.port}: '
-            '$e. If the key is passphrase-protected, passphrase auth is not '
-            'yet supported for jump hosts; re-import the key without a '
-            'passphrase or use password auth for this host.',
+            '$e. This usually means the PEM is not a valid OpenSSH private '
+            'key, or the passphrase is wrong or missing. Re-import the key '
+            '(with its passphrase) or use a different auth method for this '
+            'host.',
           );
         }
         return SSHClient(
@@ -289,6 +290,7 @@ class SshService {
       forward.stop();
     }
     _activeForwards.clear();
+    _pendingForwards.clear();
     _session?.close();
     _client?.close();
     _jumpClient?.close();
