@@ -213,40 +213,23 @@ class SftpService implements SftpBrowserBackend {
           SftpFileOpenMode.truncate,
     );
     try {
+      // Pipe the local file stream straight into the SFTP writer so reads
+      // respect the writer's pace (real backpressure) instead of buffering
+      // the whole file in a StreamController queue. The map() tracks how
+      // many bytes have been handed to the writer so progress can be
+      // reported as min(acked, sent) — never >100% during the final flush.
       var sent = 0;
-      final controller = StreamController<Uint8List>();
-      final writer = file.write(
-        controller.stream,
+      final stream = localFile.openRead().cast<Uint8List>().map((chunk) {
+        sent += chunk.length;
+        return chunk;
+      });
+      await file.write(
+        stream,
         onProgress: (acked) {
-          // dartssh2 reports acknowledged bytes; report the min of acked/sent
-          // so we never show >100% during the final flush.
           onProgress?.call(acked < sent ? acked : sent);
         },
       );
-      try {
-        // openRead() with no range streams the whole file; dartssh2 emits
-        // chunks to the writer at its own pace (backpressure via the
-        // controller's buffer).
-        // dart:io delivers Uint8List chunks; the cast just re-types the
-        // stream without copying.
-        await for (final chunk in localFile.openRead().cast<Uint8List>()) {
-          controller.add(chunk);
-          sent += chunk.length;
-        }
-        await controller.close();
-        await writer;
-        onProgress?.call(size);
-      } catch (_) {
-        // Always unblock/terminate the writer side so it can't hang waiting
-        // for more data that will never arrive.
-        try {
-          await controller.close();
-        } catch (_) {}
-        try {
-          await writer;
-        } catch (_) {}
-        rethrow;
-      }
+      onProgress?.call(size);
     } finally {
       await file.close();
     }
