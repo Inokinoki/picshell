@@ -188,5 +188,123 @@ void main() {
       await tester.pumpAndSettle();
       expect(totalAnchors(), 0);
     });
+
+    testWidgets(
+        'truncation indicator updates when streaming pushes past the cap',
+        (tester) async {
+      // Exactly 500 matches: not truncated, count shows no '+'.
+      final terminal = Terminal(maxLines: 10000);
+      for (var i = 0; i < 500; i++) {
+        terminal.write('foo\r\n');
+      }
+
+      await tester.pumpWidget(_wrap(terminal));
+      await tester.pump();
+      await tester.tap(find.byType(TerminalView));
+      await tester.pumpAndSettle();
+      await _sendCtrlShiftF(tester);
+
+      await tester.enterText(find.byType(TextField), 'foo');
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(find.text('1/500'), findsOneWidget);
+
+      // One more match beyond the cap: the capped list itself stays
+      // identical (the new match is past maxMatches), but the result is now
+      // truncated, so the '+' indicator must appear.
+      terminal.write('foo\r\n');
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(find.text('1/500+'), findsOneWidget);
+    });
+
+    testWidgets(
+        'toggling Match case with an identical result resets to match #1',
+        (tester) async {
+      final terminal = Terminal(maxLines: 1000);
+      terminal.write('foo\nfoo\nfoo\n');
+
+      await tester.pumpWidget(_wrap(terminal));
+      await tester.pump();
+      await tester.tap(find.byType(TerminalView));
+      await tester.pumpAndSettle();
+      await _sendCtrlShiftF(tester);
+
+      await tester.enterText(find.byType(TextField), 'foo');
+      await tester.pumpAndSettle();
+      expect(find.text('1/3'), findsOneWidget);
+
+      // Navigate to match 2/3.
+      await tester.tap(find.byTooltip('Next match'));
+      await tester.pumpAndSettle();
+      expect(find.text('2/3'), findsOneWidget);
+
+      // Toggling Match case yields the same match list (all-lowercase
+      // content matches both modes), but it is a fresh search: it must
+      // restart at match #1, not stay at 2/3.
+      await tester.tap(find.byTooltip('Match case'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(find.text('1/3'), findsOneWidget);
+    });
+
+    testWidgets('full scrollback wrap forces a re-search (no early return)',
+        (tester) async {
+      // Small scrollback so the buffer fills and starts wrapping. Content is
+      // periodic (foo/bar) so that, once steady-state is reached, dropping a
+      // period from the top and appending the same period at the bottom
+      // leaves the match list completely identical — exactly the case where
+      // the old early-return kept stale lineIndex snapshots.
+      final terminal = Terminal(maxLines: 40);
+      for (var i = 0; i < 20; i++) {
+        terminal.write('foo\r\nbar\r\n');
+      }
+
+      await tester.pumpWidget(_wrap(terminal));
+      await tester.pump();
+      await tester.tap(find.byType(TerminalView));
+      await tester.pumpAndSettle();
+      await _sendCtrlShiftF(tester);
+
+      await tester.enterText(find.byType(TextField), 'bar');
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(find.text('1/20'), findsOneWidget);
+
+      // First wrap write reaches the steady state (20 -> 19 matches).
+      terminal.write('bar\r\nfoo\r\n');
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(find.text('1/19'), findsOneWidget);
+
+      // Snapshot the anchors of a match in the middle of the buffer (on a
+      // line that survives further wraps).
+      final line5 = terminal.buffer.lines[5];
+      final oldAnchors = List.of(line5.anchors);
+      expect(oldAnchors.length, 2);
+
+      // Second wrap write: the match list is now completely identical to the
+      // previous result, but because the scrollback is full (lines have been
+      // dropped from the top) the widget must still re-run the search
+      // (dispose + recreate anchors) so the stored lineIndex snapshots used
+      // by _scrollToCurrent are refreshed.
+      terminal.write('bar\r\nfoo\r\n');
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+
+      expect(find.text('1/19'), findsOneWidget);
+      final newAnchors = terminal.buffer.lines[5].anchors;
+      expect(newAnchors.length, oldAnchors.length);
+      var recreated = false;
+      for (final a in newAnchors) {
+        if (!oldAnchors.any((o) => identical(o, a))) recreated = true;
+      }
+      expect(recreated, isTrue,
+          reason:
+              'anchors must be recreated after scrollback wrap (re-search ran)');
+    });
   });
 }

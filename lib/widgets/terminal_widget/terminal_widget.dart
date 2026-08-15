@@ -185,10 +185,29 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     final freshSearch = _searchOptionsChanged;
     _searchOptionsChanged = false;
 
+    // Once the scrollback is full, any new output can wrap/trim the buffer
+    // and invalidate our lineIndex snapshots even when the (capped) match
+    // list looks identical — never take the early-return path in that case;
+    // always re-run the full search (and rebuild anchors).
+    final scrollbackFull =
+        widget.terminal.buffer.height >= widget.terminal.buffer.maxLines;
+    final identical = !scrollbackFull && _sameResult(_result, result);
+
     // Nothing changed (e.g. streaming output that added no matches): keep the
     // existing highlights and anchors instead of recreating them.
-    if (_sameResult(_result, result) && _current >= 0 &&
+    if (identical && !freshSearch && _current >= 0 &&
         result.matches.isNotEmpty) {
+      return;
+    }
+
+    if (identical && result.matches.isNotEmpty) {
+      // Fresh search (option toggle / re-submitted query) with a
+      // coincidentally identical result: keep the anchors and highlights,
+      // but restart at match #1 and scroll to it per fresh-search semantics.
+      final prev = _current;
+      setState(() => _current = 0);
+      _recolor(prev, 0);
+      _scrollToCurrent();
       return;
     }
 
@@ -220,6 +239,10 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
   }
 
   bool _sameResult(SearchResult a, SearchResult b) {
+    // truncated participates: streaming can push matches past maxMatches
+    // while the capped list stays identical, and the '+' indicator and count
+    // must update.
+    if (a.truncated != b.truncated) return false;
     if (a.matches.length != b.matches.length) return false;
     for (var i = 0; i < a.matches.length; i++) {
       if (!_sameMatch(a.matches[i], b.matches[i])) return false;
