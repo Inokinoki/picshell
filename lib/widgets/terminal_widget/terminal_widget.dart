@@ -233,7 +233,10 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     // (no Terminal re-creation). An empty fontFamily falls back to xterm's
     // platform default ('monospace' + its CJK/emoji fallback chain).
     final textStyle = settings.fontFamily.isEmpty
-        ? TerminalStyle(fontSize: settings.fontSize, height: settings.lineHeight)
+        ? TerminalStyle(
+            fontSize: settings.fontSize,
+            height: settings.lineHeight,
+          )
         : TerminalStyle(
             fontFamily: settings.fontFamily,
             fontSize: settings.fontSize,
@@ -263,6 +266,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
                 controller: _terminalController,
                 focusNode: _focusNode,
                 theme: settings.palette.theme,
+                keyboardAppearance: settings.palette.keyboardBrightness,
                 textStyle: textStyle,
                 scrollController: _scrollController,
                 onKeyEvent: _onKey,
@@ -272,6 +276,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
               VirtualKeyboardBar(
                 terminal: widget.terminal,
                 controller: _terminalController,
+                keyboardBrightness: settings.palette.keyboardBrightness,
               ),
           ],
         ),
