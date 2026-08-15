@@ -186,6 +186,38 @@ void main() {
       expect(text, contains('done'));
       expect(text, isNot(contains('EEEE')));
     });
+
+    test('semicolon flood in OSC is capped, not accumulated', () {
+      // Semicolons used to bypass the cap (each grows _osc by one entry
+      // without counting toward _oscLength) — a multi-MiB flood of them must
+      // overflow and drop the sequence like payload chars do.
+      final flood = ';' * (5 * 1024 * 1024);
+      var title = '';
+      terminal.onTitleChange = (t) => title = t;
+      terminal.write('\x1b]0;victim$flood\x1b\\');
+      expect(title, '', reason: 'oversized OSC must be dropped');
+      terminal.write('\x1b]2;after-flood\x07');
+      expect(title, 'after-flood');
+    });
+
+    test('lone-ESC-at-end writes on an overflowed OSC do not wedge the parser',
+        () {
+      // Every write ends with a lone ESC (split-ST rollback candidate). Once
+      // the sequence overflowed it must be consumed (dropped), not rolled
+      // back and re-scanned on every write — otherwise the queue grows
+      // without bound.
+      const chunkSize = 64 * 1024;
+      final chunk = 'F' * chunkSize;
+      for (var i = 0; i < (10 * 1024 * 1024) ~/ chunkSize; i++) {
+        terminal.write('\x1b]0;$chunk\x1b');
+      }
+      // Terminate the (doomed) sequence and check the parser recovered.
+      terminal.write('\\');
+      terminal.write('done');
+      final text = terminal.buffer.getText();
+      expect(text, contains('done'));
+      expect(text, isNot(contains('FFFF')));
+    });
   });
 
   group('DCS / Sixel handling', () {

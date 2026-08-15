@@ -1114,8 +1114,10 @@ class EscapeParser {
       if (char == Ascii.ESC) {
         if (_queue.isEmpty) {
           // Partial ST — rollback and retry on the next write() (see
-          // _consumeUntilSt).
-          return false;
+          // _consumeUntilSt). An already-overflowed sequence is doomed —
+          // consume it instead of rolling back for a hostile
+          // lone-ESC-at-end stream.
+          return _payloadOverflowed;
         }
 
         final next = _queue.consume();
@@ -1134,7 +1136,14 @@ class EscapeParser {
 
       /// Parse next parameter
       if (char == Ascii.semicolon) {
-        _osc.add(param.toString());
+        // Semicolons count toward the cap too — a flood of them grows _osc
+        // (one entry each) just like payload chars grow param.
+        if (_oscLength >= _maxPayloadLength) {
+          _payloadOverflowed = true;
+        } else {
+          _osc.add(param.toString());
+          _oscLength++;
+        }
         param.clear();
         continue;
       }
@@ -1208,7 +1217,10 @@ class EscapeParser {
           // consumed bytes so the whole sequence is re-driven once more data
           // arrives (mirrors _consumeOsc). Returning true here would drop the
           // sequence and leak a literal backslash into the text grid.
-          return false;
+          // Exception: an already-overflowed sequence is doomed — consume it
+          // instead of rolling back megabytes for a hostile lone-ESC-at-end
+          // stream (O(n²) rescan).
+          return _payloadOverflowed;
         }
         final next = _queue.consume();
         if (next == Ascii.backslash) return true; // ST
@@ -1246,7 +1258,9 @@ class EscapeParser {
       if (char == Ascii.ESC) {
         if (_queue.isEmpty) {
           // Partial ST — rollback and retry on the next write() (see above).
-          return false;
+          // An already-overflowed sequence is doomed — consume it instead of
+          // rolling back for a hostile lone-ESC-at-end stream.
+          return _payloadOverflowed;
         }
         final next = _queue.consume();
         if (next == Ascii.backslash) return true; // ST
