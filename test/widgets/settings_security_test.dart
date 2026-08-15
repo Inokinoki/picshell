@@ -10,6 +10,7 @@ import 'package:picshell/providers/vault_provider.dart';
 import 'package:picshell/screens/settings/settings_screen.dart';
 import 'package:picshell/services/host_store.dart';
 import 'package:picshell/services/vault_service.dart';
+import 'package:picshell/widgets/launch_gate_bypassed_banner.dart';
 
 /// Records vault operations so tests can assert on the auth gate.
 class _RecordingBackend implements VaultBackend {
@@ -44,6 +45,14 @@ class _RecordingBackend implements VaultBackend {
 
 class _FakeHostStore implements HostStore {
   final List<String> reEncryptCalls = [];
+  final List<bool> requireFlagAtReEncrypt = [];
+
+  /// When set, its value is read at each reEncryptAll call to record what the
+  /// persisted requireBiometric flag was at that moment (ordering assertions).
+  bool Function()? probeRequireBiometric;
+
+  /// When set, reEncryptAll throws this instead of succeeding.
+  Object? reEncryptError;
 
   @override
   Future<void> init() async {}
@@ -92,7 +101,11 @@ class _FakeHostStore implements HostStore {
 
   @override
   Future<void> reEncryptAll(String newPassphrase) async {
+    if (probeRequireBiometric != null) {
+      requireFlagAtReEncrypt.add(probeRequireBiometric!());
+    }
     reEncryptCalls.add(newPassphrase);
+    if (reEncryptError != null) throw reEncryptError!;
   }
 }
 
@@ -195,6 +208,101 @@ void main() {
       expect(backend.deleteKeyCalls, 1);
       expect(container.read(settingsProvider).requireBiometric, isFalse);
       container.dispose();
+    });
+  });
+
+  group('crash-safe enable ordering and error feedback', () {
+    testWidgets('enable persists requireBiometric BEFORE re-encrypting',
+        (tester) async {
+      final (_, backend, hostStore, container) = await _pump(tester);
+      hostStore.probeRequireBiometric =
+          () => container.read(settingsProvider).requireBiometric;
+
+      await tester.tap(find.byType(Switch).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Enable'));
+      await tester.pumpAndSettle();
+
+      expect(hostStore.reEncryptCalls, hasLength(1));
+      expect(hostStore.requireFlagAtReEncrypt, [true],
+          reason: 'a crash right before reEncryptAll must leave the flag on '
+              'so the next launch prompts and releases the enrolled key');
+      expect(container.read(settingsProvider).requireBiometric, isTrue);
+      container.dispose();
+    });
+
+    testWidgets('enable failure rolls the flag back and shows an error snackbar',
+        (tester) async {
+      final (_, backend, hostStore, container) = await _pump(tester);
+      hostStore.reEncryptError =
+          StateError('reEncryptAll aborted: 1 record(s) failed to decrypt');
+
+      await tester.tap(find.byType(Switch).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Enable'));
+      await tester.pumpAndSettle();
+
+      expect(container.read(settingsProvider).requireBiometric, isFalse,
+          reason: 'the persisted flag must match the unchanged on-disk state');
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.textContaining('Failed to enable biometric encryption'),
+          findsOneWidget);
+      container.dispose();
+    });
+
+    testWidgets('disable failure keeps the flag, keeps the key, and shows an '
+        'error snackbar', (tester) async {
+      final (_, backend, hostStore, container) =
+          await _pump(tester, startEnabled: true);
+      hostStore.reEncryptError = StateError('boom');
+
+      await tester.tap(find.byType(Switch).first);
+      await tester.pumpAndSettle();
+
+      expect(container.read(settingsProvider).requireBiometric, isTrue);
+      expect(backend.deleteKeyCalls, 0, reason: 'key must not be dropped');
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.textContaining('Failed to disable biometric encryption'),
+          findsOneWidget);
+      container.dispose();
+    });
+  });
+
+  group('launch gate bypassed banner', () {
+    testWidgets('shows a warning banner when the provider is non-null',
+        (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            launchSecurityWarningProvider
+                .overrideWithValue('gate was bypassed warning text'),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(body: LaunchGateBypassedBanner(child: Text('app'))),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MaterialBanner), findsOneWidget);
+      expect(find.textContaining('gate was bypassed warning text'),
+          findsOneWidget);
+
+      await tester.tap(find.text('Dismiss'));
+      await tester.pumpAndSettle();
+      expect(find.byType(MaterialBanner), findsNothing);
+    });
+
+    testWidgets('shows nothing when the gate was enforced', (tester) async {
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(body: LaunchGateBypassedBanner(child: Text('app'))),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(MaterialBanner), findsNothing);
     });
   });
 }

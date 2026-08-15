@@ -10,6 +10,13 @@ final vaultServiceProvider = Provider<VaultService>((ref) {
   throw UnimplementedError('vaultServiceProvider must be overridden in main()');
 });
 
+/// Non-null when the launch biometric gate could not be enforced (biometrics
+/// required but unavailable, and even the device-passcode fallback failed) and
+/// the master key was released without verification to preserve data
+/// availability. Overridden in `main()` with the warning message; the app
+/// shell shows it as a visible banner (see `LaunchGateBypassedBanner`).
+final launchSecurityWarningProvider = Provider<String?>((ref) => null);
+
 /// Whether the app is currently locked behind the biometric gate. True means
 /// the LockScreen is shown and credentials have not yet been released to the
 /// [HostStore]. The initial value is computed in `main()` based on the

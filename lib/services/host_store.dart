@@ -147,7 +147,6 @@ class HostStore {
 
   Future<void> init() async {
     _meta = await Hive.openBox(_metaBox);
-    await _loadOrMigrateSalt();
     final storedGen = _meta.get(_genKey) as int?;
 
     if (storedGen == null) {
@@ -157,11 +156,21 @@ class HostStore {
       _gen = 1;
       final legacyExists = await Hive.boxExists(_legacyHostsBox);
       final g1Exists = await Hive.boxExists('hosts_g1');
+      // Fresh install = no host/key boxes of any generation exist and no salt
+      // was ever persisted. Such installs get a random salt. Any install with
+      // existing boxes (legacy or g1) is an existing one: it must migrate the
+      // legacy property-derived salt so already-encrypted data stays readable.
+      final anyBoxes = legacyExists ||
+          g1Exists ||
+          await Hive.boxExists(_legacyKeysBox) ||
+          await Hive.boxExists('ssh_keys_g1');
+      await _loadOrMigrateSalt(freshInstall: !anyBoxes);
       if (legacyExists || !g1Exists) {
         await _migrateLegacyBoxes();
       }
     } else {
       _gen = storedGen;
+      await _loadOrMigrateSalt(freshInstall: false);
     }
 
     _hosts = await Hive.openBox<Host>(_hostsBoxName);
@@ -208,11 +217,14 @@ class HostStore {
     await _meta.put(_genKey, 1);
   }
 
-  /// Loads the persisted KDF salt, or — for installs that predate it —
-  /// derives the legacy property-derived salt once and persists it. This
-  /// keeps existing encrypted data readable (same key) while making future
-  /// derivations immune to hostname/core-count changes.
-  Future<void> _loadOrMigrateSalt() async {
+  /// Loads the persisted KDF salt. For installs that predate it (an existing
+  /// store of hosts/keys with no persisted salt) the legacy property-derived
+  /// salt is computed once and persisted, keeping existing encrypted data
+  /// readable (same key) while making future derivations immune to
+  /// hostname/core-count changes. A fresh install (no stored salt and no
+  /// stored records at all) gets a fresh random salt — never the device-derived
+  /// one, whose only purpose is the one-time migration of existing data.
+  Future<void> _loadOrMigrateSalt({required bool freshInstall}) async {
     final stored = _meta.get(_saltKey) as String?;
     if (stored != null) {
       try {
@@ -225,7 +237,8 @@ class HostStore {
         // Corrupt entry — fall through and regenerate/migrate below.
       }
     }
-    _salt = SecretCipher.legacyDeviceSalt();
+    _salt =
+        freshInstall ? SecretCipher.randomSalt() : SecretCipher.legacyDeviceSalt();
     await _meta.put(_saltKey, base64.encode(_salt));
   }
 

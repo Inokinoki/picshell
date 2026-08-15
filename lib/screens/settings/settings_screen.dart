@@ -197,22 +197,59 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
     );
     if (!authenticated || !mounted) return;
     setState(() => _busy = true);
+    String? error;
     try {
       if (value) {
-        // Enroll a device key and re-encrypt everything under it, immediately.
+        // Crash-safe enable ordering:
+        // 1. Enroll the device key (idempotent).
+        // 2. Persist requireBiometric=true.
+        // 3. reEncryptAll(key).
+        // The flag is set BEFORE re-encryption so that a crash at any point
+        // leaves a recoverable state: if we crash after the flag is persisted
+        // but before/during re-encryption, the data is still plaintext and the
+        // key is enrolled — the next launch prompts for biometrics, releases
+        // the enrolled key (plaintext records pass through the cipher
+        // unchanged), and a retry of the enable succeeds. The inverse ordering
+        // (re-encrypt first, flag last) could crash between the two steps,
+        // leaving encrypted data with the flag off; the next launch would then
+        // start with an empty passphrase and a re-enable would hard-fail on
+        // every marked record — a permanent lockout. On failure (step 3
+        // throws) the flag is rolled back below so the persisted state always
+        // matches the on-disk encryption state.
         final key = await vault.getMasterKey();
-        await hostStore.reEncryptAll(key);
         await ref.read(settingsProvider.notifier).setRequireBiometric(true);
+        await hostStore.reEncryptAll(key);
       } else {
-        // Restore plaintext so credentials stay readable without the key,
-        // then drop the now-orphaned device key for symmetry.
+        // Disable ordering: decrypt first, then drop the flag, then the key.
+        // A crash between any two steps stays recoverable: plaintext data
+        // with the flag still on just prompts at launch and passes through.
         await hostStore.reEncryptAll('');
         await ref.read(settingsProvider.notifier).setRequireBiometric(false);
         await vault.unenroll();
       }
+    } catch (e) {
+      if (value) {
+        // Roll the flag back so persisted settings match the (unchanged)
+        // on-disk encryption state. reEncryptAll itself already restored the
+        // in-memory cipher on failure.
+        try {
+          await ref.read(settingsProvider.notifier).setRequireBiometric(false);
+        } catch (_) {}
+      }
+      error = 'Failed to ${value ? 'enable' : 'disable'} biometric encryption'
+          '${e is StateError ? '' : ': $e'}. '
+          'Your saved credentials were not changed.';
     } finally {
       // Never leave the toggle stuck busy / half-flipped on an error.
       if (mounted) setState(() => _busy = false);
+    }
+    if (error != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
     }
   }
 

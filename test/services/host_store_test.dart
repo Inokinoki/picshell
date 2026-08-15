@@ -366,6 +366,90 @@ void main() {
       // Legacy box consumed.
       expect(await Hive.boxExists('hosts'), isFalse);
     });
+
+    test('a legacy install (boxes only, no salt) still migrates the legacy '
+        'salt rather than getting a random one', () async {
+      // Old install with data in the legacy box and no salt, no generation.
+      await Hive.box('vault_meta').delete('generation');
+      await Hive.box('vault_meta').delete('salt');
+      final legacy = await Hive.openBox<Host>('hosts');
+      final legacyCipher =
+          SecretCipher(passphrase: 'old-key', salt: SecretCipher.legacyDeviceSalt());
+      await legacy.put('legacy2', Host(
+        id: 'legacy2',
+        name: 'L2',
+        hostname: '5.6.7.8',
+        username: 'root',
+        password: legacyCipher.encrypt('legacy-salt-data'),
+      ));
+
+      final fresh = HostStore();
+      await fresh.init();
+      expect(base64.decode(Hive.box('vault_meta').get('salt') as String),
+          equals(SecretCipher.legacyDeviceSalt()));
+      fresh.setPassphrase('old-key');
+      expect(fresh.getHost('legacy2')?.password, 'legacy-salt-data');
+    });
+  });
+
+  group('enable crash-window (flag persisted before re-encryption)', () {
+    test('crash after flag-on but before reEncryptAll stays recoverable and '
+        'the retried enable succeeds', () async {
+      // State after the crash: settings.requireBiometric=true was persisted,
+      // the master key 'dev-key' was enrolled in the vault, but reEncryptAll
+      // never ran — the data on disk is still plaintext.
+      await store.addHost(Host(
+        id: 'cw',
+        name: 'CW',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'plain-secret',
+      ));
+
+      // Next launch: flag on -> biometric prompt succeeds -> enrolled key
+      // released to the store. Plaintext passes through the cipher untouched.
+      final relaunched = HostStore();
+      await relaunched.init();
+      relaunched.setPassphrase('dev-key');
+      expect(relaunched.getHost('cw')?.password, 'plain-secret');
+
+      // The user retries enabling: same enrolled key, reEncryptAll succeeds.
+      await relaunched.reEncryptAll('dev-key');
+
+      // The data is now actually encrypted at rest...
+      final raw = Hive.box<Host>('hosts_g${_activeGeneration()}').get('cw')!;
+      expect(raw.password, isNot(equals('plain-secret')));
+      expect(SecretCipher.isEncryptedValue(raw.password!), isTrue);
+
+      // ...and a further restart with the key released still decrypts.
+      final third = HostStore();
+      await third.init();
+      third.setPassphrase('dev-key');
+      expect(third.getHost('cw')?.password, 'plain-secret');
+    });
+
+    test('crash after a completed enable stays recoverable on relaunch',
+        () async {
+      // Full successful enable: key enrolled, flag on, data re-encrypted.
+      await store.reEncryptAll('dev-key');
+      final relaunched = HostStore();
+      await relaunched.init();
+      relaunched.setPassphrase('dev-key');
+      final host = Host(
+        id: 'post',
+        name: 'P',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'post-enable-secret',
+      );
+      await relaunched.addHost(host);
+      expect(relaunched.getHost('post')?.password, 'post-enable-secret');
+
+      final third = HostStore();
+      await third.init();
+      third.setPassphrase('dev-key');
+      expect(third.getHost('post')?.password, 'post-enable-secret');
+    });
   });
 
   group('KDF salt persistence (vault_meta)', () {
@@ -398,6 +482,57 @@ void main() {
       await again.init();
       again.setPassphrase('k1');
       expect(again.getHost('salt1')?.password, 'salted-secret');
+    });
+
+    test('fresh install gets a random salt, not the device-derived one',
+        () async {
+      // This store's setUp ran against an empty Hive dir = fresh install.
+      final persisted = Hive.box('vault_meta').get('salt') as String;
+      expect(base64.decode(persisted).length, 16);
+      expect(
+        base64.decode(persisted),
+        isNot(equals(SecretCipher.legacyDeviceSalt())),
+        reason: 'a fresh install must never inherit the property-derived '
+            'salt — it exists only to migrate existing encrypted data',
+      );
+
+      // A record written by the fresh install still decrypts after restart.
+      store.setPassphrase('fresh-key');
+      await store.addHost(Host(
+        id: 'fresh1',
+        name: 'F',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'fresh-secret',
+      ));
+      final reopened = HostStore();
+      await reopened.init();
+      reopened.setPassphrase('fresh-key');
+      expect(reopened.getHost('fresh1')?.password, 'fresh-secret');
+    });
+
+    test('an existing install with data but no salt migrates the legacy salt',
+        () async {
+      // The setUp store already created g1 boxes (an "existing install");
+      // delete only the salt to simulate a pre-persisted-salt version.
+      await Hive.box('vault_meta').delete('salt');
+      final legacyCipher =
+          SecretCipher(passphrase: 'old-key', salt: SecretCipher.legacyDeviceSalt());
+      final rawBox = await Hive.openBox<Host>(_activeHostsBox());
+      await rawBox.put('pre2', Host(
+        id: 'pre2',
+        name: 'Pre2',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: legacyCipher.encrypt('legacy-kept'),
+      ));
+
+      final migrated = HostStore();
+      await migrated.init();
+      expect(base64.decode(Hive.box('vault_meta').get('salt') as String),
+          equals(SecretCipher.legacyDeviceSalt()));
+      migrated.setPassphrase('old-key');
+      expect(migrated.getHost('pre2')?.password, 'legacy-kept');
     });
 
     test('first init migrates the legacy property-derived salt once', () async {
