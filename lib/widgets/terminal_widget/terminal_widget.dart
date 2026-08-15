@@ -37,7 +37,16 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
   SearchResult _result = const SearchResult(matches: [], truncated: false);
   int _current = -1; // index into _result.matches, -1 when none
   List<TerminalHighlight> _highlights = [];
+  // Anchors per match (index-aligned with _result.matches; null entries for
+  // matches whose line has scrolled out of the buffer). Kept separately from
+  // the highlights so a highlight can be recoloured by disposing and recreating
+  // it on the same anchors.
+  List<({CellAnchor a1, CellAnchor a2})?> _anchors = [];
   Timer? _debounce;
+  // True when the query/options changed since the last _runSearch — a fresh
+  // search restarts at match #1; false means a streaming refresh that must
+  // preserve the current match.
+  bool _searchOptionsChanged = true;
 
   @override
   void initState() {
@@ -83,11 +92,14 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
   /// (they accumulate in BufferLine._anchors and slow every text mutation).
   void _disposeHighlights() {
     for (final h in _highlights) {
-      h.p1.dispose();
-      h.p2.dispose();
       h.dispose();
     }
     _highlights = [];
+    for (final a in _anchors) {
+      a?.a1.dispose();
+      a?.a2.dispose();
+    }
+    _anchors = [];
   }
 
   void _scheduleSearch() {
@@ -120,12 +132,15 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
   @override
   bool get wantKeepAlive => true;
 
-  /// Intercepts Ctrl+F (open search) and Esc (close) before the terminal input
-  /// handler sees them. Everything else passes through unchanged.
+  /// Intercepts Ctrl+Shift+F (open search) and Esc (close) before the terminal
+  /// input handler sees them. Everything else — including bare Ctrl+F, which
+  /// shells and TUIs expect (readline forward-char, emacs, …) — passes through
+  /// unchanged. Ctrl+Shift+F mirrors the Ctrl+Shift+C/V copy/paste convention.
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
     if (HardwareKeyboard.instance.isControlPressed &&
+        HardwareKeyboard.instance.isShiftPressed &&
         key == LogicalKeyboardKey.keyF) {
       _openSearch();
       return KeyEventResult.handled;
@@ -153,29 +168,96 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
       _searchFieldController.clear();
       _result = const SearchResult(matches: [], truncated: false);
       _current = -1;
+      _searchOptionsChanged = true;
     });
     _focusNode.requestFocus();
   }
 
   void _onQueryChanged(String value) {
     _query = value;
+    _searchOptionsChanged = true;
     _scheduleSearch();
   }
 
   void _runSearch() {
     final result = _search.find(_query,
         caseSensitive: _caseSensitive, regex: _regex);
+    final freshSearch = _searchOptionsChanged;
+    _searchOptionsChanged = false;
+
+    // Once the scrollback is full, any new output can wrap/trim the buffer
+    // and invalidate our lineIndex snapshots even when the (capped) match
+    // list looks identical — never take the early-return path in that case;
+    // always re-run the full search (and rebuild anchors).
+    final scrollbackFull =
+        widget.terminal.buffer.height >= widget.terminal.buffer.maxLines;
+    final identical = !scrollbackFull && _sameResult(_result, result);
+
+    // Nothing changed (e.g. streaming output that added no matches): keep the
+    // existing highlights and anchors instead of recreating them.
+    if (identical && !freshSearch && _current >= 0 &&
+        result.matches.isNotEmpty) {
+      return;
+    }
+
+    if (identical && result.matches.isNotEmpty) {
+      // Fresh search (option toggle / re-submitted query) with a
+      // coincidentally identical result: keep the anchors and highlights,
+      // but restart at match #1 and scroll to it per fresh-search semantics.
+      final prev = _current;
+      setState(() => _current = 0);
+      _recolor(prev, 0);
+      _scrollToCurrent();
+      return;
+    }
+
+    var next = result.matches.isEmpty ? -1 : 0;
+    var scroll = true;
+    if (!freshSearch && _current >= 0 && result.matches.isNotEmpty) {
+      // Streaming refresh: preserve the current match. Keep the index if it
+      // still points at the same match, otherwise follow the old current match
+      // to its new index, or clamp as a last resort (that counts as
+      // invalidation and re-scrolls).
+      final old = _result.matches[_current];
+      var idx = _current < result.matches.length &&
+              _sameMatch(result.matches[_current], old)
+          ? _current
+          : result.matches.indexWhere((m) => _sameMatch(m, old));
+      if (idx < 0) {
+        idx = _current.clamp(0, result.matches.length - 1);
+      } else {
+        scroll = false;
+      }
+      next = idx;
+    }
     setState(() {
       _result = result;
-      _current = result.matches.isEmpty ? -1 : 0;
+      _current = next;
     });
     _applyHighlights();
-    if (_current >= 0) _scrollToCurrent();
+    if (scroll && _current >= 0) _scrollToCurrent();
   }
 
+  bool _sameResult(SearchResult a, SearchResult b) {
+    // truncated participates: streaming can push matches past maxMatches
+    // while the capped list stays identical, and the '+' indicator and count
+    // must update.
+    if (a.truncated != b.truncated) return false;
+    if (a.matches.length != b.matches.length) return false;
+    for (var i = 0; i < a.matches.length; i++) {
+      if (!_sameMatch(a.matches[i], b.matches[i])) return false;
+    }
+    return true;
+  }
+
+  bool _sameMatch(SearchMatch a, SearchMatch b) =>
+      a.lineIndex == b.lineIndex &&
+      a.colStart == b.colStart &&
+      a.colEnd == b.colEnd;
+
   /// Recreates every highlight (the background colour distinguishes the
-  /// current match). Called when the result set or current index changes; cheap
-  /// enough at the [TerminalSearch.maxMatches] cap for a user-initiated action.
+  /// current match). Called when the result set changes; cheap enough at the
+  /// [TerminalSearch.maxMatches] cap for a user-initiated action.
   void _applyHighlights() {
     _disposeHighlights();
     final buffer = widget.terminal.buffer;
@@ -184,15 +266,21 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     final theme = ref.read(settingsProvider).palette.theme;
     final bg = theme.searchHitBackground;
     final bgCur = theme.searchHitBackgroundCurrent;
-    for (var i = 0; i < _result.matches.length; i++) {
+    _anchors = List.generate(_result.matches.length, (i) {
       final m = _result.matches[i];
       // Skip matches whose line has scrolled out of the buffer entirely.
-      if (m.lineIndex < 0 || m.lineIndex >= buffer.height) continue;
-      final a1 = buffer.createAnchor(m.colStart, m.lineIndex);
-      final a2 = buffer.createAnchor(m.colEnd, m.lineIndex);
+      if (m.lineIndex < 0 || m.lineIndex >= buffer.height) return null;
+      return (
+        a1: buffer.createAnchor(m.colStart, m.lineIndex),
+        a2: buffer.createAnchor(m.colEnd, m.lineIndex),
+      );
+    });
+    for (var i = 0; i < _anchors.length; i++) {
+      final a = _anchors[i];
+      if (a == null) continue;
       _highlights.add(_terminalController.highlight(
-        p1: a1,
-        p2: a2,
+        p1: a.a1,
+        p2: a.a2,
         color: i == _current ? bgCur : bg,
       ));
     }
@@ -200,12 +288,42 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
 
   void _goto(int index) {
     if (_result.matches.isEmpty) return;
+    final prev = _current;
     setState(() {
       _current = (index % _result.matches.length + _result.matches.length) %
           _result.matches.length;
     });
-    _applyHighlights();
+    // Navigation only changes which match is "current": recolour just the two
+    // affected highlights instead of recreating every anchor and highlight.
+    _recolor(prev, _current);
     _scrollToCurrent();
+  }
+
+  /// Recolours the [prev] and [cur] matches, reusing their existing anchors.
+  void _recolor(int prev, int cur) {
+    if (prev == cur) return;
+    final theme = ref.read(settingsProvider).palette.theme;
+    final bg = theme.searchHitBackground;
+    final bgCur = theme.searchHitBackgroundCurrent;
+    for (final i in [prev, cur]) {
+      if (i < 0 || i >= _anchors.length) continue;
+      final a = _anchors[i];
+      if (a == null) continue;
+      // Disposing the old highlight detaches it from the controller; the
+      // anchors stay alive and are reused for the replacement highlight.
+      final old = _highlights
+          .where((h) => h.p1 == a.a1 && h.p2 == a.a2)
+          .toList();
+      for (final h in old) {
+        h.dispose();
+        _highlights.remove(h);
+      }
+      _highlights.add(_terminalController.highlight(
+        p1: a.a1,
+        p2: a.a2,
+        color: i == cur ? bgCur : bg,
+      ));
+    }
   }
 
   /// Scrolls so the current match is centred. Derives line height from the
@@ -285,7 +403,15 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
             top: 0,
             left: 0,
             right: 0,
-            child: _buildSearchBar(),
+            // CallbackShortcuts so Esc closes the search even when focus sits
+            // on one of the bar's buttons (which never see the field's
+            // onKeyEvent).
+            child: CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.escape): _closeSearch,
+              },
+              child: _buildSearchBar(),
+            ),
           ),
       ],
     );
@@ -314,7 +440,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
                   textInputAction: TextInputAction.search,
                   decoration: const InputDecoration(
                     isDense: true,
-                    hintText: 'Search (Ctrl+F)',
+                    hintText: 'Search (Ctrl+Shift+F)',
                     border: InputBorder.none,
                   ),
                   onChanged: _onQueryChanged,
@@ -329,6 +455,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
                 icon: const Icon(Icons.text_fields_outlined),
                 onPressed: () {
                   setState(() => _caseSensitive = !_caseSensitive);
+                  _searchOptionsChanged = true;
                   _runSearch();
                 },
               ),
@@ -340,6 +467,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
                 icon: const Icon(Icons.code_off),
                 onPressed: () {
                   setState(() => _regex = !_regex);
+                  _searchOptionsChanged = true;
                   _runSearch();
                 },
               ),

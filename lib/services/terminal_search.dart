@@ -56,7 +56,9 @@ class TerminalSearch {
     RegExp? pattern;
     if (regex) {
       try {
-        pattern = RegExp(query, caseSensitive: caseSensitive);
+        // multiLine so `^`/`$` anchor at each buffer line, not just line 0.
+        pattern = RegExp(query,
+            caseSensitive: caseSensitive, multiLine: true);
       } on FormatException {
         return const SearchResult(matches: [], truncated: false);
       }
@@ -74,6 +76,9 @@ class TerminalSearch {
 
       // Records a [charStart, charEnd) match as cell columns on this line.
       void record(int charStart, int charEnd) {
+        // Zero-width matches (e.g. `x*`, `\b`, `^`) have no cell span to
+        // highlight and would index cellOf[-1]; skip them.
+        if (charEnd <= charStart) return;
         if (matches.length >= maxMatches) {
           truncated = true;
           return;

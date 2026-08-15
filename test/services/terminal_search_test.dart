@@ -92,5 +92,37 @@ void main() {
       expect(TerminalSearch(terminal).find('(', regex: true).matches, isEmpty);
       expect(TerminalSearch(terminal).find('[a-', regex: true).matches, isEmpty);
     });
+
+    test('zero-width regex matches are skipped, not crashed on', () {
+      final terminal = Terminal(maxLines: 1000);
+      terminal.write('hello\n');
+      for (final pattern in ['x*', 'o*', '\\b', '^', '\$', '']) {
+        expect(
+          () => TerminalSearch(terminal).find(pattern, regex: true),
+          returnsNormally,
+          reason: 'pattern "$pattern" must not throw',
+        );
+      }
+      // Zero-width matches have no cell span to highlight, so none are
+      // recorded; non-zero-width parts of such patterns still match.
+      expect(
+          TerminalSearch(terminal).find('x*', regex: true).matches, isEmpty);
+      final mixed =
+          TerminalSearch(terminal).find('l+', regex: true).matches;
+      expect(mixed.length, 1); // 'll' in 'hello'
+      expect(mixed[0].colEnd, greaterThan(mixed[0].colStart));
+    });
+
+    test('multiLine anchors match at the start of every line', () {
+      final terminal = Terminal(maxLines: 1000);
+      terminal.write('ab\r\ncd\r\n');
+      // Without multiLine, '^' would only match the first line.
+      final result = TerminalSearch(terminal).find('^', regex: true);
+      // Zero-width matches are skipped, so use a pattern that consumes a char.
+      final result2 = TerminalSearch(terminal).find('^.', regex: true);
+      expect(result2.matches.length, 2);
+      expect(result2.matches.every((m) => m.colStart == 0), isTrue);
+      expect(result.matches, isEmpty);
+    });
   });
 }
