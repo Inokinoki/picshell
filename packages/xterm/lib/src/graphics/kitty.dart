@@ -72,10 +72,11 @@ class KittyGraphicsHandler {
     if (!transmit) return;
 
     // Lazily expire an orphaned pending transfer.
-    final pending = _pending;
+    var pending = _pending;
     if (pending != null &&
-        DateTime.now().difference(pending.startedAt) > pendingTimeout) {
+        DateTime.now().difference(pending.lastChunkAt) > pendingTimeout) {
       _pending = null;
+      pending = null;
     }
 
     if (more) {
@@ -115,6 +116,7 @@ class KittyGraphicsHandler {
   /// base64 quantum at the chunk boundary is carried over). Returns false if
   /// the transfer is over the cap or the chunk is malformed base64.
   bool _appendChunk(_Pending p, String data) {
+    p.lastChunkAt = DateTime.now();
     if (data.isEmpty) return true;
     if (p.b64Chars + data.length > maxAccumulatedBytes) return false;
     p.b64Chars += data.length;
@@ -184,8 +186,10 @@ class _Pending {
   /// Total base64 characters seen, for cap enforcement.
   int b64Chars = 0;
 
-  /// When this transfer started, for orphan expiry.
-  final DateTime startedAt = DateTime.now();
+  /// When the last chunk of this transfer arrived, for orphan expiry. A
+  /// legitimately slow but active transfer must not be discarded mid-flight,
+  /// so the timeout is measured from the last activity, not the start.
+  DateTime lastChunkAt = DateTime.now();
 
   _Pending({this.imageId, this.width, this.height, this.format = '100'});
 }

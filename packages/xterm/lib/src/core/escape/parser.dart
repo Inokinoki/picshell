@@ -1052,6 +1052,9 @@ class EscapeParser {
     if (!consumed) {
       return false;
     }
+    if (_payloadOverflowed) {
+      return true; // oversized — consumed but dropped
+    }
 
     if (_osc.isEmpty) {
       return true;
@@ -1084,15 +1087,21 @@ class EscapeParser {
 
   final _osc = <String>[];
 
+  /// Total OSC characters accumulated in the current sequence, to enforce
+  /// [_maxPayloadLength] (OSC splits its payload into `;`-separated params, so
+  /// each param is short but a hostile stream can grow them without bound).
+  int _oscLength = 0;
+
   bool _consumeOsc() {
     _osc.clear();
+    _payloadOverflowed = false;
+    _oscLength = 0;
     final param = StringBuffer();
 
     while (true) {
-      if (_queue.isEmpty) {
-        return false;
-      }
-
+      // Doomed oversized sequence — consume instead of rolling back (see
+      // _consumeUntilSt), so bytes aren't re-scanned on every write().
+      if (_queue.isEmpty) return _payloadOverflowed;
       final char = _queue.consume();
 
       // OSC terminates with BEL
@@ -1104,14 +1113,23 @@ class EscapeParser {
       /// OSC terminates with ST
       if (char == Ascii.ESC) {
         if (_queue.isEmpty) {
+          // Partial ST — rollback and retry on the next write() (see
+          // _consumeUntilSt).
           return false;
         }
 
-        if (_queue.consume() == Ascii.backslash) {
+        final next = _queue.consume();
+        if (next == Ascii.backslash) {
           _osc.add(param.toString());
+          return true; // ST
         }
-
-        return true;
+        // A lone ESC inside the payload is NOT a terminator (only `ESC \` or
+        // BEL is) — treat both bytes as payload so a follow-up write starting
+        // with its own escape sequence doesn't falsely terminate this one
+        // mid-stream and leak its remainder into the text grid.
+        _oscAccumulate(param, Ascii.ESC);
+        _oscAccumulate(param, next);
+        continue;
       }
 
       /// Parse next parameter
@@ -1121,6 +1139,18 @@ class EscapeParser {
         continue;
       }
 
+      // Past the cap, keep consuming (so bytes aren't rolled back and
+      // re-scanned on the next write) but stop accumulating.
+      _oscAccumulate(param, char);
+    }
+  }
+
+  /// Appends one payload char to [param], enforcing [_maxPayloadLength].
+  void _oscAccumulate(StringBuffer param, int char) {
+    if (_oscLength >= _maxPayloadLength) {
+      _payloadOverflowed = true;
+    } else {
+      _oscLength++;
       param.writeCharCode(char);
     }
   }
@@ -1129,8 +1159,9 @@ class EscapeParser {
   final _dcsPayload = StringBuffer();
   String _dcsCommand = '';
 
-  /// Cap on APC/DCS payload accumulation, to bound memory and CPU on untrusted
-  /// remote output. Without it an unterminated `ESC _`/`ESC P` stream would
+  /// Cap on APC/DCS/OSC payload accumulation, to bound memory and CPU on
+  /// untrusted remote output. Without it an unterminated `ESC _`/`ESC P`/
+  /// `ESC ]` stream would
   /// (a) grow the payload buffer without limit and (b) be rolled back and
   /// re-scanned from scratch on every write() — O(n²). Once the cap is hit the
   /// sequence is still consumed up to its terminator but dropped (not handed

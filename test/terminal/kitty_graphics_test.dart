@@ -159,6 +159,33 @@ void main() {
       expect(text, isNot(contains('BBBB')));
       expect(received.length, 0, reason: 'oversized transfer must be dropped');
     });
+    test('oversized OSC payload (>4 MiB) is dropped, not accumulated', () {
+      // ~5 MiB of OSC payload in one sequence — over the parser cap. The
+      // title must not change and following sequences must be handled.
+      final big = 'D' * (5 * 1024 * 1024);
+      var title = '';
+      terminal.onTitleChange = (t) => title = t;
+      terminal.write('\x1b]2;$big\x1b\\');
+      expect(title, '');
+      terminal.write('\x1b]2;after-osc\x07');
+      expect(title, 'after-osc');
+    });
+
+    test('unterminated multi-MiB OSC stream does not wedge the parser', () {
+      // Feed 10 MiB of OSC payload *without* a terminator in chunks, then
+      // terminate and check the parser recovered: the payload never leaked
+      // into the text buffer and following text renders normally.
+      const chunkSize = 64 * 1024;
+      final chunk = 'E' * chunkSize;
+      for (var i = 0; i < (10 * 1024 * 1024) ~/ chunkSize; i++) {
+        terminal.write('\x1b]0;$chunk');
+      }
+      terminal.write('$_st');
+      terminal.write('done');
+      final text = terminal.buffer.getText();
+      expect(text, contains('done'));
+      expect(text, isNot(contains('EEEE')));
+    });
   });
 
   group('DCS / Sixel handling', () {
