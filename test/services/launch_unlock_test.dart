@@ -118,8 +118,8 @@ void main() {
     expect(hostStore.isEncrypting, isTrue);
   });
 
-  test('required + unavailable + fallback fails: key released, bypass flagged',
-      () async {
+  test('required + unavailable + user cancels passcode fallback: locked, '
+      'NOT bypassed (no key release)', () async {
     await _requireBiometric(true);
     final backend = _FakeBackend()
       ..canAuth = false
@@ -127,11 +127,28 @@ void main() {
       ..authResult = false;
     final result = await performLaunchUnlock(
         settingsBox: settingsBox, hostStore: hostStore, vault: VaultService(backend));
-    expect(result.startLocked, isFalse);
-    expect(result.gateBypassed, isTrue, reason: 'UI must warn the user');
-    expect(hostStore.isEncrypting, isTrue,
-        reason: 'data availability: the enrolled key is still released so '
-            'ciphertext does not get surfaced/overwritten as plaintext');
+    expect(result.startLocked, isTrue,
+        reason: 'a refused verification (cancel / wrong passcode) must lock, '
+            'not bypass');
+    expect(result.gateBypassed, isFalse);
+    expect(hostStore.isEncrypting, isFalse,
+        reason: 'the key must not be released over a refused verification');
+  });
+
+  test('required + available + authenticate THROWS: app launches locked, key '
+      'not released, no bypass', () async {
+    await _requireBiometric(true);
+    final backend = _FakeBackend()
+      ..storedKey = 'enrolled-key'
+      ..authThrows = true;
+    final result = await performLaunchUnlock(
+        settingsBox: settingsBox, hostStore: hostStore, vault: VaultService(backend));
+    expect(result.startLocked, isTrue,
+        reason: 'a local_auth throw (LockedOut/NotAvailable) must not crash '
+            'startup and must not release the key');
+    expect(result.gateBypassed, isFalse);
+    expect(result.reEncryptionFailed, isFalse);
+    expect(hostStore.isEncrypting, isFalse);
   });
 
   test('required + unavailable + authenticate throws: recovery + bypass flag',
@@ -148,13 +165,100 @@ void main() {
     expect(hostStore.isEncrypting, isTrue);
   });
 
+  test('interrupted enable: plaintext secrets detected after a VERIFIED '
+      'launch are re-encrypted automatically', () async {
+    await _requireBiometric(true);
+    // Simulate the crash state: flag on, key enrolled, data still plaintext.
+    await hostStore.addKey(SshKey(
+        id: 'k1', name: 'key', privateKeyPem: 'SECRET PEM', publicKey: 'pub'));
+    await hostStore.addHost(Host(
+        id: 'h1',
+        name: 'h',
+        hostname: 'example.com',
+        port: 22,
+        username: 'u',
+        authType: AuthType.password,
+        password: 'plain-password'));
+    expect(hostStore.hasUnmarkedSecrets, isTrue);
+    final backend = _FakeBackend()
+      ..storedKey = 'enrolled-key'
+      ..authResult = true;
+    final result = await performLaunchUnlock(
+        settingsBox: settingsBox, hostStore: hostStore, vault: VaultService(backend));
+    expect(result.startLocked, isFalse);
+    expect(result.gateBypassed, isFalse);
+    expect(result.reEncryptionFailed, isFalse,
+        reason: 'the repair runs under the verified key and must succeed');
+    expect(hostStore.hasUnmarkedSecrets, isFalse,
+        reason: 'interrupted re-encryption must be completed');
+    expect(hostStore.isEncrypting, isTrue);
+    // Data survived, decrypted under the released key.
+    expect(hostStore.getHost('h1')!.password, 'plain-password');
+    expect(hostStore.getKey('k1')!.privateKeyPem, 'SECRET PEM');
+  });
+
+  test('interrupted enable: repair failure is reported, not swallowed', () async {
+    await _requireBiometric(true);
+    // Plaintext secret (triggers the repair) plus a corrupt marked record
+    // (makes reEncryptAll hard-fail).
+    await hostStore.addHost(Host(
+        id: 'h1',
+        name: 'h',
+        hostname: 'example.com',
+        port: 22,
+        username: 'u',
+        authType: AuthType.password,
+        password: 'plain-password'));
+    await hostStore.addHost(Host(
+        id: 'h-corrupt',
+        name: 'c',
+        hostname: 'example.com',
+        port: 22,
+        username: 'u',
+        authType: AuthType.password,
+        password: 'enc.v2.not-valid-base64!!'));
+    final backend = _FakeBackend()
+      ..storedKey = 'enrolled-key'
+      ..authResult = true;
+    final result = await performLaunchUnlock(
+        settingsBox: settingsBox, hostStore: hostStore, vault: VaultService(backend));
+    expect(result.startLocked, isFalse);
+    expect(result.gateBypassed, isFalse);
+    expect(result.reEncryptionFailed, isTrue,
+        reason: 'UI must warn: some secrets are still plaintext on disk');
+  });
+
+  test('no interrupted enable: verified launch does not touch the boxes',
+      () async {
+    await _requireBiometric(true);
+    await hostStore.addHost(Host(
+        id: 'h1',
+        name: 'h',
+        hostname: 'example.com',
+        port: 22,
+        username: 'u',
+        authType: AuthType.password,
+        password: 'plain-password'));
+    // First launch repairs the plaintext...
+    final backend = _FakeBackend()
+      ..storedKey = 'enrolled-key'
+      ..authResult = true;
+    await performLaunchUnlock(
+        settingsBox: settingsBox, hostStore: hostStore, vault: VaultService(backend));
+    // ...second verified launch is a no-op repair.
+    final result2 = await performLaunchUnlock(
+        settingsBox: settingsBox, hostStore: hostStore, vault: VaultService(backend));
+    expect(result2.reEncryptionFailed, isFalse);
+    expect(hostStore.hasUnmarkedSecrets, isFalse);
+  });
+
   test('required + unavailable + no key ever enrolled: bypass flagged, '
       'cipher untouched', () async {
     await _requireBiometric(true);
     final backend = _FakeBackend()
       ..canAuth = false
       ..storedKey = null
-      ..authResult = false;
+      ..authThrows = true;
     final result = await performLaunchUnlock(
         settingsBox: settingsBox, hostStore: hostStore, vault: VaultService(backend));
     expect(result.startLocked, isFalse);

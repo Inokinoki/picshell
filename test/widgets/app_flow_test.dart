@@ -60,6 +60,9 @@ class _FakeHostStore implements HostStore {
   bool get isEncrypting => false;
 
   @override
+  bool get hasUnmarkedSecrets => false;
+
+  @override
   void setPassphrase(String passphrase) {}
 
   @override

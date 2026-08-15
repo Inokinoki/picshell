@@ -16,9 +16,17 @@ class LaunchUnlockResult {
   /// (see `launchSecurityWarningProvider`).
   final bool gateBypassed;
 
+  /// True when secrets left plaintext by an interrupted "enable biometric
+  /// encryption" (crash between persisting the flag and the re-encryption
+  /// finishing) were detected at launch and the automatic re-completion under
+  /// the verified master key FAILED. The UI must warn the user that some
+  /// credentials are still stored unencrypted.
+  final bool reEncryptionFailed;
+
   const LaunchUnlockResult({
     required this.startLocked,
     required this.gateBypassed,
+    this.reEncryptionFailed = false,
   });
 }
 
@@ -54,9 +62,22 @@ Future<LaunchUnlockResult> performLaunchUnlock({
   }
 
   if (await vault.canAuthenticate) {
-    if (await vault.authenticate()) {
-      hostStore.setPassphrase(await vault.getMasterKey());
-      return const LaunchUnlockResult(startLocked: false, gateBypassed: false);
+    bool verified;
+    try {
+      verified = await vault.authenticate();
+    } catch (_) {
+      // local_auth THROWS on transient failures (LockedOut, NotAvailable,
+      // plugin errors). A throw must never escape into main() (the app would
+      // fail to launch until the timeout expires) and must NEVER release the
+      // key without verification — start locked so the user can retry.
+      return const LaunchUnlockResult(startLocked: true, gateBypassed: false);
+    }
+    if (verified) {
+      final key = await vault.getMasterKey();
+      hostStore.setPassphrase(key);
+      final repairFailed = await _completeInterruptedEnable(hostStore, key);
+      return LaunchUnlockResult(
+          startLocked: false, gateBypassed: false, reEncryptionFailed: repairFailed);
     }
     // User cancelled or biometrics failed — show the lock screen for retry.
     return const LaunchUnlockResult(startLocked: true, gateBypassed: false);
@@ -64,14 +85,20 @@ Future<LaunchUnlockResult> performLaunchUnlock({
 
   // Required but biometrics reportedly unavailable. Defense-in-depth: try
   // anyway — local_auth with biometricOnly:false can still verify via the
-  // device passcode/pin. A throw here means the device cannot show any
-  // prompt at all.
+  // device passcode/pin.
   try {
     if (await vault.authenticate(
         reason: 'Unlock Picshell credentials (device passcode fallback)')) {
-      hostStore.setPassphrase(await vault.getMasterKey());
-      return const LaunchUnlockResult(startLocked: false, gateBypassed: false);
+      final key = await vault.getMasterKey();
+      hostStore.setPassphrase(key);
+      final repairFailed = await _completeInterruptedEnable(hostStore, key);
+      return LaunchUnlockResult(
+          startLocked: false, gateBypassed: false, reEncryptionFailed: repairFailed);
     }
+    // The prompt was shown but the user cancelled or entered a wrong
+    // passcode — verification was REFUSED, not impossible. Lock the app; do
+    // NOT release the key over a refusal.
+    return const LaunchUnlockResult(startLocked: true, gateBypassed: false);
   } catch (_) {
     // No prompt could be shown at all — fall through to the recovery path.
   }
@@ -84,4 +111,26 @@ Future<LaunchUnlockResult> performLaunchUnlock({
   final existing = await vault.releaseKeyForLaunchRecovery();
   if (existing != null) hostStore.setPassphrase(existing);
   return const LaunchUnlockResult(startLocked: false, gateBypassed: true);
+}
+
+/// Repairs an interrupted "enable biometric encryption": a crash between
+/// persisting `requireBiometric=true` and `reEncryptAll` completing (or a
+/// silently-failed rollback of the flag) leaves the flag on with plaintext
+/// secrets on disk while the UI claims encrypted. After a VERIFIED launch the
+/// master key is available, so finish the re-encryption right here. Safe with
+/// [HostStore.reEncryptAll]: already-marked ciphertext decrypts under the
+/// released key, unmarked (plaintext) values pass through the cipher as-is,
+/// and everything is then written back encrypted.
+///
+/// Returns true when a repair was needed but failed — the caller must surface
+/// a persistent warning so the user knows some secrets are still plaintext.
+Future<bool> _completeInterruptedEnable(
+    HostStore hostStore, String masterKey) async {
+  if (!hostStore.hasUnmarkedSecrets) return false;
+  try {
+    await hostStore.reEncryptAll(masterKey);
+    return false;
+  } catch (_) {
+    return true;
+  }
 }
