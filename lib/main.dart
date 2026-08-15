@@ -91,7 +91,7 @@ Future<bool> _initialUnlock(HostStore hostStore, VaultService vault) async {
   // key so credentials still decrypt (prevents data loss). If no key was ever
   // enrolled (shouldn't happen with require=true) there is nothing encrypted
   // to misread, so proceeding unlocked is safe.
-  final existing = await vault.existingMasterKey;
+  final existing = await vault.releaseKeyForLaunchRecovery();
   if (existing != null) hostStore.setPassphrase(existing);
   return false;
 }

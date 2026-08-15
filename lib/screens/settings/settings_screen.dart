@@ -176,6 +176,10 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
     if (mounted) setState(() => _available = ok);
   }
 
+  /// Flips the vault on/off. Both directions require a successful user
+  /// verification (`vault.authenticate()`) — whoever is holding the unlocked
+  /// app must prove they own it before encryption is disabled (which would
+  /// otherwise expose every secret as plaintext) or re-keyed.
   Future<void> _toggleRequire(bool value) async {
     if (_busy) return;
     final vault = ref.read(vaultServiceProvider);
@@ -185,6 +189,13 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
       final confirmed = await _confirmEnable();
       if (!confirmed || !mounted) return;
     }
+    // Verify the user before changing the vault state, in either direction.
+    final authenticated = await vault.authenticate(
+      reason: value
+          ? 'Enable biometric encryption for saved credentials'
+          : 'Disable biometric encryption for saved credentials',
+    );
+    if (!authenticated || !mounted) return;
     setState(() => _busy = true);
     try {
       if (value) {
@@ -212,7 +223,8 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
             title: const Text('Enable biometric encryption'),
             content: const Text(
               'Saved passwords and private keys will be encrypted with a '
-              'device-bound key, unlocked by Face ID / fingerprint at launch.\n\n'
+              'device-bound key, unlocked by your biometric or device '
+              'passcode at launch.\n\n'
               'Note: uninstalling the app or resetting the device loses that '
               'key — encrypted passwords cannot be recovered (connection '
               'details remain viewable).',
@@ -247,7 +259,8 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
             checking
                 ? 'Checking device capability…'
                 : available
-                    ? 'Encrypt and unlock credentials with Face ID / fingerprint'
+                    ? 'Encrypt credentials; unlock with biometrics or device '
+                      'passcode'
                     : 'Biometrics not supported on this device',
           ),
           value: settings.requireBiometric && available,

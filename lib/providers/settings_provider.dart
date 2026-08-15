@@ -57,7 +57,13 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   /// before the app (and thus [SettingsNotifier]) is running.
   static const biometricKey = _requireBiometricKey;
 
-  SettingsNotifier({bool loadFromStorage = true}) : super(const AppSettings()) {
+  /// When false, setters update state only — used by widget tests, where
+  /// real Hive file IO inside a fake-async zone never completes.
+  final bool _persist;
+
+  SettingsNotifier({bool loadFromStorage = true, bool persist = true})
+      : _persist = persist,
+        super(const AppSettings()) {
     if (loadFromStorage) _load();
   }
 
@@ -73,27 +79,29 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     );
   }
 
+  Future<void> _persistPut(String key, Object value) async {
+    if (!_persist) return;
+    final box = await Hive.openBox(_boxName);
+    await box.put(key, value);
+  }
+
   Future<void> setKeyboardBarMode(KeyboardBarMode mode) async {
     state = state.copyWith(keyboardBarMode: mode);
-    final box = await Hive.openBox(_boxName);
-    await box.put(_keyboardModeKey, mode.index);
+    await _persistPut(_keyboardModeKey, mode.index);
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
     state = state.copyWith(themeMode: mode);
-    final box = await Hive.openBox(_boxName);
-    await box.put(_themeModeKey, mode.index);
+    await _persistPut(_themeModeKey, mode.index);
   }
 
   Future<void> setRequireBiometric(bool value) async {
     state = state.copyWith(requireBiometric: value);
-    final box = await Hive.openBox(_boxName);
-    await box.put(_requireBiometricKey, value);
+    await _persistPut(_requireBiometricKey, value);
   }
 
   Future<void> setRelockOnBackground(bool value) async {
     state = state.copyWith(relockOnBackground: value);
-    final box = await Hive.openBox(_boxName);
-    await box.put(_relockOnBackgroundKey, value);
+    await _persistPut(_relockOnBackgroundKey, value);
   }
 }

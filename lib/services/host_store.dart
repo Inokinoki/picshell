@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:hive/hive.dart';
 import '../models/host.dart';
 import '../models/ssh_key.dart';
@@ -22,6 +25,15 @@ class HostStore {
   static const _sessionsBox = 'sessions';
   static const _metaBox = 'vault_meta';
   static const _genKey = 'generation';
+  static const _saltKey = 'salt';
+
+  /// KDF salt for the active cipher. Random 16 bytes, generated once and
+  /// persisted in the `vault_meta` box so the derived key never depends on mutable
+  /// device properties (hostname, CPU count). Existing installs that predate
+  /// the persisted salt are migrated in [init]: their legacy property-derived
+  /// salt is computed one last time and written to storage, preserving their
+  /// data while stabilising future derivations.
+  Uint8List _salt = SecretCipher.randomSalt();
 
   late Box<Host> _hosts;
   late Box<SshKey> _keys;
@@ -43,11 +55,12 @@ class HostStore {
   /// re-encryption.
   String _currentPassphrase = '';
 
-  /// Swaps in a new cipher derived from [passphrase]. Call once at startup
-  /// (after [init]) if the user has configured a master passphrase.
+  /// Swaps in a new cipher derived from [passphrase] (and the persisted
+  /// salt). Call once at startup (after [init]) if the user has configured a
+  /// master passphrase.
   void setPassphrase(String passphrase) {
     _currentPassphrase = passphrase;
-    _cipher = SecretCipher(passphrase: passphrase);
+    _cipher = SecretCipher(passphrase: passphrase, salt: _salt);
   }
 
   /// Re-encrypts every stored secret under [newPassphrase], crash-safely.
@@ -70,8 +83,26 @@ class HostStore {
   /// passphrase (it just creates a redundant new generation).
   Future<void> reEncryptAll(String newPassphrase) async {
     final oldPassphrase = _currentPassphrase;
-    final hosts = getHosts(); // decrypted under the current cipher
-    final keys = getKeys();
+    // Capture everything decrypted under the *current* cipher. Any record
+    // that is definitely ciphertext (carries the encryption marker) but fails
+    // to decrypt means the passphrase does not match the active generation —
+    // re-encrypting now would snapshot ciphertext as if it were plaintext and
+    // permanently destroy the secret. Hard-fail instead.
+    final hosts = <Host>[];
+    final keys = <SshKey>[];
+    final corrupt = <String>[];
+    for (final raw in _hosts.values) {
+      hosts.add(_decryptHost(raw, corrupt.add));
+    }
+    for (final raw in _keys.values) {
+      keys.add(_decryptKey(raw, corrupt.add));
+    }
+    if (corrupt.isNotEmpty) {
+      throw StateError(
+        'reEncryptAll aborted: ${corrupt.length} record(s) failed to decrypt '
+        'under the current passphrase: ${corrupt.join(', ')}',
+      );
+    }
 
     final nextGen = _gen + 1;
     final stagingHosts = await Hive.openBox<Host>('hosts_g$nextGen');
@@ -116,6 +147,7 @@ class HostStore {
 
   Future<void> init() async {
     _meta = await Hive.openBox(_metaBox);
+    await _loadOrMigrateSalt();
     final storedGen = _meta.get(_genKey) as int?;
 
     if (storedGen == null) {
@@ -174,6 +206,27 @@ class HostStore {
       await legacy.deleteFromDisk();
     }
     await _meta.put(_genKey, 1);
+  }
+
+  /// Loads the persisted KDF salt, or — for installs that predate it —
+  /// derives the legacy property-derived salt once and persists it. This
+  /// keeps existing encrypted data readable (same key) while making future
+  /// derivations immune to hostname/core-count changes.
+  Future<void> _loadOrMigrateSalt() async {
+    final stored = _meta.get(_saltKey) as String?;
+    if (stored != null) {
+      try {
+        final bytes = base64.decode(stored);
+        if (bytes.length == 16) {
+          _salt = bytes;
+          return;
+        }
+      } catch (_) {
+        // Corrupt entry — fall through and regenerate/migrate below.
+      }
+    }
+    _salt = SecretCipher.legacyDeviceSalt();
+    await _meta.put(_saltKey, base64.encode(_salt));
   }
 
   /// Removes generation boxes older than the active one (left behind by a
@@ -243,11 +296,31 @@ class HostStore {
     );
   }
 
-  Host _decryptHost(Host host) {
+  /// Decrypts a stored password. Semantics:
+  /// - marker-prefixed ciphertext that decrypts → plaintext;
+  /// - marker-prefixed ciphertext that fails → null (unreadable without the
+  ///   right key; never surfaced as-if plaintext). If [onCorrupt] is given it
+  ///   is called with the record id so [reEncryptAll] can hard-fail;
+  /// - unmarked value (plaintext, or legacy pre-marker ciphertext): returned
+  ///   as-is when it does not decrypt, matching the historical fallback.
+  Host _decryptHost(Host host, [void Function(String id)? onCorrupt]) {
     if (host.password == null || host.password!.isEmpty) return host;
-    final plain = _cipher.decrypt(host.password!);
-    // If decryption fails (e.g. passphrase mismatch, or the value was never
-    // encrypted), fall back to the stored value rather than losing the host.
+    final stored = host.password!;
+    final plain = _cipher.decrypt(stored);
+    if (plain == null && SecretCipher.isEncryptedValue(stored)) {
+      onCorrupt?.call(host.id);
+      return Host(
+        id: host.id,
+        name: host.name,
+        hostname: host.hostname,
+        port: host.port,
+        username: host.username,
+        authType: host.authType,
+        keyId: host.keyId,
+        password: null,
+        groupId: host.groupId,
+      );
+    }
     return Host(
       id: host.id,
       name: host.name,
@@ -256,7 +329,7 @@ class HostStore {
       username: host.username,
       authType: host.authType,
       keyId: host.keyId,
-      password: plain ?? host.password,
+      password: plain ?? stored,
       groupId: host.groupId,
     );
   }
@@ -287,12 +360,19 @@ class HostStore {
     );
   }
 
-  SshKey _decryptKey(SshKey key) {
-    final plain = _cipher.decrypt(key.privateKeyPem);
+  /// Same semantics as [_decryptHost], except the model's [SshKey.privateKeyPem]
+  /// is non-nullable: on failure the stored value is kept (for display only)
+  /// and the record is reported to [onCorrupt] so [reEncryptAll] hard-fails.
+  SshKey _decryptKey(SshKey key, [void Function(String id)? onCorrupt]) {
+    final stored = key.privateKeyPem;
+    final plain = _cipher.decrypt(stored);
+    if (plain == null && SecretCipher.isEncryptedValue(stored)) {
+      onCorrupt?.call(key.id);
+    }
     return SshKey(
       id: key.id,
       name: key.name,
-      privateKeyPem: plain ?? key.privateKeyPem,
+      privateKeyPem: plain ?? stored,
       publicKey: key.publicKey,
     );
   }

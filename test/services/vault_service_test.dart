@@ -85,19 +85,19 @@ void main() {
       expect(backend.storedKey, isNull);
     });
 
-    test('existingMasterKey reads without generating, returns null when absent',
-        () async {
+    test('releaseKeyForLaunchRecovery reads without generating, returns null '
+        'when absent', () async {
       final backend = _FakeBackend();
       final vault = VaultService(backend);
 
       // Nothing enrolled yet — read-only lookup returns null (does NOT create).
-      expect(await vault.existingMasterKey, isNull);
+      expect(await vault.releaseKeyForLaunchRecovery(), isNull);
       expect(backend.storedKey, isNull);
       expect(await vault.isEnrolled, isFalse);
 
-      // After enrollment, the read-only getter returns the same key.
+      // After enrollment, the read-only lookup returns the same key.
       final enrolled = await vault.getMasterKey();
-      expect(await vault.existingMasterKey, enrolled);
+      expect(await vault.releaseKeyForLaunchRecovery(), enrolled);
     });
   });
 }
