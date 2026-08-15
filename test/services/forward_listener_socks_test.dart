@@ -160,6 +160,57 @@ void main() async {
       await closed.future.timeout(const Duration(seconds: 5));
       // Reaching here means the server closed the stalled connection.
     }, skip: skip, timeout: const Timeout(Duration(seconds: 15)));
+
+    test('deadline firing mid-CONNECT does not escape as an unhandled error',
+        () async {
+      // Rebind with a deadline so short it fires while `forwardLocal` is still
+      // in flight: close() destroys the socket, and the catch block's
+      // 0x04 reply would then write to a destroyed socket (StateError thrown
+      // from inside the catch, escaping _negotiate as an unhandled zone
+      // error). The guarded reply path must swallow it.
+      await forward!.stop();
+      forward = await ActiveForward.bind(
+        client!,
+        ForwardRule(
+          id: 'socks-deadline-race-test',
+          type: ForwardType.socks,
+          localPort: 0,
+        ),
+        socksHandshakeTimeout: const Duration(milliseconds: 300),
+      );
+
+      // Fail the whole test on any unhandled async error: flutter_test already
+      // fails a test whose zone produces one, so merely running the race here
+      // is the assertion.
+
+      // macOS occasionally surfaces ECONNRESET on rapid reconnects to the
+      // same listener; retry once or twice so the flake doesn't mask the
+      // behavior under test.
+      Socket s;
+      try {
+        s = await Socket.connect('127.0.0.1', forward!.boundPort);
+      } catch (_) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        s = await Socket.connect('127.0.0.1', forward!.boundPort);
+      }
+      final closed = Completer<void>();
+      s.listen((_) {}, onDone: closed.complete,
+          onError: (_) => closed.complete());
+      // Handshake to a black-holed address (no route to host from the sshd, so
+      // `forwardLocal` stalls in channel-open) — the 300ms deadline fires while
+      // it is in flight. The server closes without a reply. This exercises the
+      // guarded reply path (the 0x04 write in the forwardLocal catch runs
+      // against a destroyed socket); flutter_test fails the test on any
+      // unhandled async error, so a regression to an unguarded `socket.add`
+      // that escapes surfaces here.
+      s.add(Uint8List.fromList([0x05, 0x01, 0x00]));
+      await Future.delayed(const Duration(milliseconds: 50));
+      s.add(Uint8List.fromList(
+          [0x05, 0x01, 0x00, 0x01, 10, 255, 255, 1, 0, 22]));
+      await closed.future.timeout(const Duration(seconds: 5));
+      // Give any raced catch-path reply write a chance to surface.
+      await Future.delayed(const Duration(milliseconds: 100));
+    }, skip: skip, timeout: const Timeout(Duration(seconds: 15)));
   });
 }
 

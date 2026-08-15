@@ -206,6 +206,7 @@ class _SocksConn {
   final List<int> _buf = [];
   Completer<void>? _fill;
   bool _closed = false;
+  bool _halfClosed = false;
   late final StreamSubscription<Uint8List> _sub;
   SSHForwardChannel? _channel;
   final Completer<void> _done = Completer<void>();
@@ -230,7 +231,23 @@ class _SocksConn {
         }
       },
       onError: (_) => close(),
-      onDone: () => close(),
+      // Half-close aware: the SOCKS client's FIN must not tear down the remote
+      // direction while it may still have data to deliver. If a channel is
+      // attached, propagate EOF to the remote and keep delivering downstream;
+      // full teardown happens when the channel finishes (onDone/onError below
+      // in _attach). Mid-handshake FIN (no channel yet) is a full close.
+      onDone: () {
+        if (_channel != null && !_closed) {
+          _halfClosed = true;
+          try {
+            _channel!.sink.close();
+          } catch (_) {
+            close();
+          }
+        } else {
+          close();
+        }
+      },
     );
   }
 
@@ -269,6 +286,20 @@ class _SocksConn {
     }
   }
 
+  /// Queues bytes on the client socket unless the connection is already torn
+  /// down. The handshake deadline (or a peer event) can race an in-flight
+  /// `_negotiate`: `close()` destroys the socket, and a subsequent `socket.add`
+  /// on a destroyed socket throws StateError from inside the catch block — an
+  /// unhandled error escaping `_negotiate`. Swallow that here.
+  void _socketAdd(List<int> bytes) {
+    if (_closed) return;
+    try {
+      socket.add(bytes);
+    } catch (_) {
+      close();
+    }
+  }
+
   /// Runs the SOCKS5 method-selection + CONNECT handshake, then opens a
   /// direct-tcpip channel and switches this connection into piping mode.
   Future<void> _negotiate(SSHClient client) async {
@@ -283,12 +314,12 @@ class _SocksConn {
       if (!methods.contains(0x00)) {
         // No acceptable methods — we only support NO AUTH (0x00). The method
         // selection reply is exactly 2 bytes: VER METHOD.
-        socket.add(Uint8List.fromList([0x05, 0xFF]));
+        _socketAdd(Uint8List.fromList([0x05, 0xFF]));
         throw const _SocksError('no acceptable auth method');
       }
       // Select NO AUTH. The method-selection reply is 2 bytes (VER METHOD),
       // distinct from the 10-byte command reply [_socksReply].
-      socket.add(Uint8List.fromList([0x05, 0x00]));
+      _socketAdd(Uint8List.fromList([0x05, 0x00]));
 
       // 2. Request: VER CMD RSV ATYP DST.ADDR DST.PORT
       final req = await read(4);
@@ -297,7 +328,7 @@ class _SocksConn {
       }
       if (req[1] != 0x01) {
         // Only CONNECT (0x01) is supported.
-        socket.add(_socksReply(0x07)); // command not supported
+        _socketAdd(_socksReply(0x07)); // command not supported
         throw const _SocksError('only CONNECT supported');
       }
       final atyp = req[3];
@@ -320,7 +351,7 @@ class _SocksConn {
           }
           host = groups.join(':');
         default:
-          socket.add(_socksReply(0x08)); // address type not supported
+          _socketAdd(_socksReply(0x08)); // address type not supported
           throw const _SocksError('unsupported address type');
       }
       final pb = await read(2);
@@ -332,10 +363,12 @@ class _SocksConn {
         channel = await client.forwardLocal(host, port);
       } catch (_) {
         // Distinguish nothing further — remote host unreachable / refused.
-        socket.add(_socksReply(0x04)); // host unreachable
+        // The deadline may have fired (socket destroyed) while forwardLocal
+        // was in flight; _socketAdd guards against writing to it.
+        _socketAdd(_socksReply(0x04)); // host unreachable
         rethrow;
       }
-      socket.add(_socksReply(0x00)); // succeeded
+      _socketAdd(_socksReply(0x00)); // succeeded
       _attach(channel);
     } catch (_) {
       close();
@@ -352,9 +385,7 @@ class _SocksConn {
       _buf.clear();
     }
     channel.stream.listen(
-      (Uint8List data) {
-        if (!_closed) socket.add(data);
-      },
+      (Uint8List data) => _socketAdd(data),
       onError: (_) => close(),
       onDone: close,
     );
