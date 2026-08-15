@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/settings_provider.dart';
 import '../providers/vault_provider.dart';
 import '../screens/lock/lock_screen.dart';
+import '../widgets/launch_gate_bypassed_banner.dart';
 import 'routes.dart';
 
 class PicshellApp extends ConsumerStatefulWidget {
@@ -80,6 +81,10 @@ class _PicshellAppState extends ConsumerState<PicshellApp>
       theme: lightTheme,
       darkTheme: darkTheme,
       routerConfig: router,
+      // Shows the "credential gate was bypassed" warning banner when the
+      // launch unlock could not verify the user (see performLaunchUnlock).
+      builder: (context, child) =>
+          LaunchGateBypassedBanner(child: child),
     );
   }
 }

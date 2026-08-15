@@ -40,7 +40,7 @@ abstract class VaultBackend {
 /// **Threat-model caveat (v1):** the biometric gate is enforced in Dart
 /// (the app only calls [setPassphrase] after a prompt), NOT by the OS keychain.
 /// The master key itself is readable from the platform secret store without a
-/// biometric (see [existingMasterKey]). The key IS OS-bound though: on Apple
+/// biometric (see [releaseKeyForLaunchRecovery]). The key IS OS-bound though: on Apple
 /// platforms it uses kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly (no
 /// backup/device migration, requires an unlocked passcode-set device) and on
 /// Android EncryptedSharedPreferences (Keystore-wrapped). This defeats raw
@@ -50,8 +50,6 @@ abstract class VaultBackend {
 /// a biometric. True biometric-bound key release would need
 /// SecAccessControl(biometryAny) / CryptoObject, which local_auth 2.x does not
 /// expose from Dart — tracked as a v2 follow-up.
-/// credentials unrecoverable — the connection metadata survives, passwords do
-/// not.
 class VaultService {
   final VaultBackend _backend;
   VaultService(this._backend);
@@ -61,11 +59,14 @@ class VaultService {
   /// Whether a master key has already been enrolled on this device.
   Future<bool> get isEnrolled async => (await _backend.readKey()) != null;
 
-  /// Returns the enrolled master key without generating one, or null if none
-  /// is stored. Used for best-effort recovery when biometrics are configured
-  /// but temporarily unavailable (so credentials still decrypt instead of
-  /// being surfaced as ciphertext).
-  Future<String?> get existingMasterKey => _backend.readKey();
+  /// Launch-recovery helper: returns the enrolled key (or null if none)
+  /// without prompting, so the startup path can release it to the credential
+  /// store when biometrics are required but temporarily unavailable (e.g.
+  /// enrolled prints were deleted). No user verification happens here — this
+  /// is the one deliberate exception, documented by the threat-model caveat
+  /// above; all other callers must go through [authenticate] +
+  /// [getMasterKey]. Sole intended call site: launch unlock in `main.dart`.
+  Future<String?> releaseKeyForLaunchRecovery() => _backend.readKey();
 
   /// Returns the master key, generating and persisting a fresh random one on
   /// first call. Idempotent: once enrolled, the same key is returned forever.

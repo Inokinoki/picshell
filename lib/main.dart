@@ -9,10 +9,10 @@ import 'package:picshell/models/known_host.dart';
 import 'package:picshell/models/session.dart';
 import 'package:picshell/models/ssh_key.dart';
 import 'package:picshell/providers/host_provider.dart';
-import 'package:picshell/providers/settings_provider.dart';
 import 'package:picshell/providers/vault_provider.dart';
 import 'package:picshell/services/host_store.dart';
 import 'package:picshell/services/known_hosts_store.dart';
+import 'package:picshell/services/launch_unlock.dart';
 import 'package:picshell/services/local_auth_vault_backend.dart';
 import 'package:picshell/services/vault_service.dart';
 import 'package:picshell/widgets/floating_image_widget.dart';
@@ -41,7 +41,11 @@ void main() async {
 
   // Credential vault: device-bound master key gated by biometrics.
   final vault = VaultService(LocalAuthVaultBackend());
-  final startLocked = await _initialUnlock(hostStore, vault);
+  final unlock = await performLaunchUnlock(
+    settingsBox: await Hive.openBox('settings'),
+    hostStore: hostStore,
+    vault: vault,
+  );
 
   runApp(
     ProviderScope(
@@ -50,51 +54,18 @@ void main() async {
         knownHostsStoreProvider.overrideWithValue(knownHostsStore),
         vaultServiceProvider.overrideWithValue(vault),
         appLockProvider.overrideWith(
-          (ref) => AppLockNotifier(vault, hostStore, initiallyLocked: startLocked),
+          (ref) => AppLockNotifier(vault, hostStore,
+              initiallyLocked: unlock.startLocked),
         ),
+        launchSecurityWarningProvider.overrideWithValue(unlock.gateBypassed
+            ? 'Biometric unlock is required, but biometrics are currently '
+                'unavailable on this device and the passcode fallback failed. '
+                'Your credentials were unlocked WITHOUT verification so they '
+                'stay readable. Re-enrol biometrics (system settings) to '
+                'restore the gate.'
+            : null),
       ],
       child: const PicshellApp(),
     ),
   );
-}
-
-/// Performs the launch-time biometric gate. Returns true if the app should
-/// start locked (i.e. the LockScreen must show because biometric auth did not
-/// succeed). When biometrics succeed the master key is released to the
-/// [HostStore], enabling at-rest decryption.
-///
-/// When biometrics are not required, the app starts unlocked and credentials
-/// remain stored as before (backward compatible).
-///
-/// If biometrics are required but the device can no longer prompt (e.g. the
-/// user deleted all enrolled prints after enabling), we cannot biometrically
-/// gate — but we MUST still release the existing master key to [HostStore] so
-/// saved credentials decrypt correctly. Otherwise the empty-passphrase cipher
-/// would surface their ciphertext as plaintext passwords, and any later
-/// "disable" would overwrite the real secrets with that garbage (silent
-/// permanent data loss). Reading the key without a prompt is consistent with
-/// the threat model (the gate is app-enforced, not OS-enforced; see
-/// VaultService) and only happens when there is no biometric to prompt with.
-Future<bool> _initialUnlock(HostStore hostStore, VaultService vault) async {
-  final settingsBox = await Hive.openBox('settings');
-  final requireBiometric =
-      settingsBox.get(SettingsNotifier.biometricKey, defaultValue: false) as bool;
-  if (!requireBiometric) return false;
-
-  if (await vault.canAuthenticate) {
-    if (await vault.authenticate()) {
-      hostStore.setPassphrase(await vault.getMasterKey());
-      return false; // unlocked
-    }
-    // User cancelled or biometrics failed — show the lock screen for retry.
-    return true;
-  }
-
-  // Required but biometrics unavailable now. Best-effort recover the existing
-  // key so credentials still decrypt (prevents data loss). If no key was ever
-  // enrolled (shouldn't happen with require=true) there is nothing encrypted
-  // to misread, so proceeding unlocked is safe.
-  final existing = await vault.existingMasterKey;
-  if (existing != null) hostStore.setPassphrase(existing);
-  return false;
 }
