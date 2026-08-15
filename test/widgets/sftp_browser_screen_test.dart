@@ -22,6 +22,9 @@ class _FakeBackend implements SftpBrowserBackend {
   // tests can observe the in-flight progress UI.
   Completer<void>? downloadGate;
   Completer<void>? uploadGate;
+  // When set, upload throws after reporting some progress, simulating a
+  // mid-upload backend failure (e.g. connection lost).
+  Object? uploadError;
 
   _FakeBackend() {
     _dirs['/home/user'] = [
@@ -59,9 +62,11 @@ class _FakeBackend implements SftpBrowserBackend {
   }
 
   @override
-  Future<void> upload(localPath, remotePath, {onProgress}) async {
+  Future<void> upload(localPath, remotePath, {onProgress, onStart}) async {
     calls.add('upload:$localPath->$remotePath');
+    onStart?.call(32);
     onProgress?.call(16);
+    if (uploadError != null) throw uploadError!;
     if (uploadGate != null) await uploadGate!.future;
     onProgress?.call(32);
     // Reflect into the dir so a refresh shows it.
@@ -259,16 +264,17 @@ void main() {
     await tester.tap(find.byTooltip('Upload Here'));
     await tester.pump();
 
-    // In-flight: label is shown (indeterminate — local size unknown on a
-    // nonexistent test path).
+    // In-flight: label + 50% (16 of 32 bytes) against a determinate bar —
+    // the backend reports the total via onStart.
     expect(find.text('Uploading other.bin'), findsOneWidget);
+    expect(find.text('50%'), findsOneWidget);
     expect(
       tester
           .widget<LinearProgressIndicator>(
             find.byType(LinearProgressIndicator),
           )
           .value,
-      isNull,
+      closeTo(0.5, 0.001),
     );
 
     backend.uploadGate!.complete();
@@ -276,6 +282,31 @@ void main() {
 
     expect(find.text('Uploading other.bin'), findsNothing);
     expect(find.text('Uploaded other.bin'), findsOneWidget);
+  });
+
+  testWidgets('a mid-upload backend failure shows an error and clears the bar', (
+    tester,
+  ) async {
+    final backend = _FakeBackend()
+      ..uploadError = Exception('write failed');
+    await tester.pumpWidget(
+      _wrap(
+        SftpBrowserScreen(
+          sessionId: 's1',
+          backend: backend,
+          localFiles: _FakeLocalFiles(uploadSource: '/fake/other.bin'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Upload Here'));
+    await tester.pumpAndSettle();
+
+    // The error surfaces as a snackbar (bare message, like other actions)
+    // and the progress bar is torn down instead of hanging.
+    expect(find.textContaining('write failed'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
   testWidgets('delete on a file calls remove', (tester) async {
