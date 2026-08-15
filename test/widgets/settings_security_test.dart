@@ -97,6 +97,9 @@ class _FakeHostStore implements HostStore {
   bool get isEncrypting => false;
 
   @override
+  bool get hasUnmarkedSecrets => false;
+
+  @override
   void setPassphrase(String passphrase) {}
 
   @override
@@ -302,8 +305,8 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            launchSecurityWarningProvider
-                .overrideWithValue('gate was bypassed warning text'),
+            launchSecurityWarningProvider.overrideWithValue(
+                const LaunchGateStatus(gateBypassed: true)),
           ],
           child: const MaterialApp(
             home: Scaffold(body: LaunchGateBypassedBanner(child: Text('app'))),
@@ -313,7 +316,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(MaterialBanner), findsOneWidget);
-      expect(find.textContaining('gate was bypassed warning text'),
+      expect(find.byType(MaterialBanner), findsOneWidget);
+      expect(find.textContaining('unlocked WITHOUT verification'),
           findsOneWidget);
 
       await tester.tap(find.text('Dismiss'));
@@ -332,5 +336,98 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(MaterialBanner), findsNothing);
     });
+
+    testWidgets('shows a warning banner when an interrupted re-encryption '
+        'could not be repaired', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            launchSecurityWarningProvider.overrideWithValue(
+                const LaunchGateStatus(reEncryptionFailed: true)),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(body: LaunchGateBypassedBanner(child: Text('app'))),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MaterialBanner), findsOneWidget);
+      expect(find.textContaining('stored unencrypted'), findsOneWidget);
+    });
+
+    testWidgets('shows nothing when the status is all-clear flags only',
+        (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            launchSecurityWarningProvider
+                .overrideWithValue(const LaunchGateStatus()),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(body: LaunchGateBypassedBanner(child: Text('app'))),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(MaterialBanner), findsNothing);
+    });
   });
+
+  group('rollback failure surfaced', () {
+    testWidgets('failed flag rollback is reported, not silently swallowed',
+        (tester) async {
+      final backend = _RecordingBackend();
+      final vault = VaultService(backend);
+      final hostStore = _FakeHostStore()
+        ..reEncryptError = StateError('reEncryptAll aborted');
+
+      final container = ProviderContainer(overrides: [
+        hostStoreProvider.overrideWithValue(hostStore),
+        settingsProvider.overrideWith((ref) =>
+            _FailingRollbackSettingsNotifier()),
+        vaultServiceProvider.overrideWithValue(vault),
+      ]);
+      addTearDown(container.dispose);
+      (container.read(settingsProvider.notifier)
+              as _FailingRollbackSettingsNotifier)
+          .failDisable = true;
+
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: SettingsScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(Switch).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Enable'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.textContaining('could NOT be rolled back'), findsOneWidget,
+          reason: 'the user must learn the persisted flag may not match the '
+              'on-disk state');
+    });
+  });
+}
+
+/// [SettingsNotifier] whose disable path can be made to throw, simulating a
+/// failed persistence of the requireBiometric rollback.
+class _FailingRollbackSettingsNotifier extends SettingsNotifier {
+  bool failDisable = false;
+
+  _FailingRollbackSettingsNotifier()
+      : super(loadFromStorage: false, persist: false);
+
+  @override
+  Future<void> setRequireBiometric(bool value) async {
+    if (!value && failDisable) throw Exception('settings box write failed');
+    await super.setRequireBiometric(value);
+  }
 }

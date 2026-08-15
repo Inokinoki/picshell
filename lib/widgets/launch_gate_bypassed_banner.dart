@@ -19,13 +19,38 @@ class LaunchGateBypassedBanner extends ConsumerStatefulWidget {
 
 class _LaunchGateBypassedBannerState
     extends ConsumerState<LaunchGateBypassedBanner> {
+  /// User-facing warning text for the launch-security status. Lives here (not
+  /// in `main()`) so startup wiring stays free of presentation strings.
+  static String _warningText(LaunchGateStatus status) {
+    if (status.gateBypassed && status.reEncryptionFailed) {
+      return 'Biometric unlock is required, but biometrics are currently '
+          'unavailable on this device and the passcode fallback failed. '
+          'Your credentials were unlocked WITHOUT verification so they stay '
+          'readable. Re-enrol biometrics (system settings) to restore the '
+          'gate.\nAdditionally, some saved credentials could not be '
+          're-encrypted and are still stored unencrypted.';
+    }
+    if (status.gateBypassed) {
+      return 'Biometric unlock is required, but biometrics are currently '
+          'unavailable on this device and the passcode fallback failed. '
+          'Your credentials were unlocked WITHOUT verification so they stay '
+          'readable. Re-enrol biometrics (system settings) to restore the '
+          'gate.';
+    }
+    return 'Biometric encryption is enabled, but finishing the encryption of '
+        'your saved credentials failed (an earlier attempt was interrupted). '
+        'Some passwords or private keys may still be stored unencrypted. '
+        'Reopen Settings and toggle biometric encryption to retry.';
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final warning = ref.read(launchSecurityWarningProvider);
-      if (warning == null) return;
+      final status = ref.read(launchSecurityWarningProvider);
+      if (status == null || status.isEmpty) return;
+      final warning = _warningText(status);
       final messenger = ScaffoldMessenger.of(context);
       if (messenger.mounted) {
         messenger.showMaterialBanner(

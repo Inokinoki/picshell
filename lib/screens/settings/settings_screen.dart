@@ -357,11 +357,28 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
         // Roll the flag back so persisted settings match the (unchanged)
         // on-disk encryption state. reEncryptAll itself already restored the
         // in-memory cipher on failure.
+        var rollbackFailed = false;
         try {
           await ref.read(settingsProvider.notifier).setRequireBiometric(false);
-        } catch (_) {}
+        } catch (rollbackError) {
+          // Never silently swallow this: a failed rollback leaves the flag on
+          // with plaintext data — the exact state the crash-safe ordering
+          // exists to avoid. Log it and tell the user; the launch path will
+          // also attempt an automatic repair on the next verified unlock.
+          rollbackFailed = true;
+          debugPrint('requireBiometric rollback failed: $rollbackError');
+        }
+        if (rollbackFailed) {
+          error = 'Failed to enable biometric encryption'
+              '${e is StateError ? '' : ': $e'}. '
+              'Your saved credentials were not changed. '
+              'Warning: the require-biometric setting could NOT be rolled '
+              'back, so it may no longer match the stored data — retry the '
+              'toggle or the next unlock will attempt to finish the '
+              'encryption automatically.';
+        }
       }
-      error = 'Failed to ${value ? 'enable' : 'disable'} biometric encryption'
+      error ??= 'Failed to ${value ? 'enable' : 'disable'} biometric encryption'
           '${e is StateError ? '' : ': $e'}. '
           'Your saved credentials were not changed.';
     } finally {
@@ -411,6 +428,11 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
     final settings = ref.watch(settingsProvider);
     final available = _available ?? false;
     final checking = _available == null;
+    // The toggle reflects the persisted vault state honestly: if the vault is
+    // armed (requireBiometric=true) it shows ON even when biometrics are
+    // currently unavailable — showing OFF would let the user believe the
+    // vault is disabled while data on disk is still governed by the flag.
+    final armedButUnavailable = settings.requireBiometric && !available && !checking;
 
     return Column(
       children: [
@@ -420,12 +442,17 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
           subtitle: Text(
             checking
                 ? 'Checking device capability…'
-                : available
-                    ? 'Encrypt credentials; unlock with biometrics or device '
-                      'passcode'
-                    : 'Biometrics not supported on this device',
+                : armedButUnavailable
+                    ? 'Encryption is ON but biometrics are unavailable on '
+                      'this device. At launch the device passcode is used as '
+                      'fallback; if that also fails, credentials unlock with '
+                      'a visible warning.'
+                    : available
+                        ? 'Encrypt credentials; unlock with biometrics or '
+                          'device passcode'
+                        : 'Biometrics not supported on this device',
           ),
-          value: settings.requireBiometric && available,
+          value: settings.requireBiometric,
           onChanged: (!available || _busy) ? null : _toggleRequire,
         ),
         SwitchListTile(

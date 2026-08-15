@@ -145,6 +145,25 @@ class HostStore {
   /// Whether secrets are currently being encrypted (non-empty passphrase).
   bool get isEncrypting => _cipher.encrypt('x') != 'x';
 
+  /// Whether any stored secret field is UNMARKED (no encryption marker), i.e.
+  /// definitely-not-encrypted-with-the-current-format. Used at launch to
+  /// detect an interrupted enable: `requireBiometric` is on but the records
+  /// are still plaintext (crash between persisting the flag and
+  /// [reEncryptAll] completing). Reads the raw stored values — a decrypted
+  /// view cannot distinguish formerly-encrypted from never-encrypted.
+  bool get hasUnmarkedSecrets {
+    for (final h in _hosts.values) {
+      final p = h.password;
+      if (p != null && p.isNotEmpty && !SecretCipher.isEncryptedValue(p)) {
+        return true;
+      }
+    }
+    for (final k in _keys.values) {
+      if (!SecretCipher.isEncryptedValue(k.privateKeyPem)) return true;
+    }
+    return false;
+  }
+
   Future<void> init() async {
     _meta = await Hive.openBox(_metaBox);
     final storedGen = _meta.get(_genKey) as int?;

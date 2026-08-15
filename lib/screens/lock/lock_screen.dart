@@ -24,7 +24,14 @@ class _LockScreenState extends ConsumerState<LockScreen> {
       _busy = true;
       _failed = false;
     });
-    final ok = await ref.read(appLockProvider.notifier).unlock();
+    bool ok;
+    try {
+      ok = await ref.read(appLockProvider.notifier).unlock();
+    } catch (_) {
+      // local_auth can throw (LockedOut, plugin errors) — treat like a
+      // failed attempt so the user can retry instead of a stranded spinner.
+      ok = false;
+    }
     if (!mounted) return;
     if (!ok) {
       setState(() {

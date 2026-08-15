@@ -57,13 +57,13 @@ void main() async {
           (ref) => AppLockNotifier(vault, hostStore,
               initiallyLocked: unlock.startLocked),
         ),
-        launchSecurityWarningProvider.overrideWithValue(unlock.gateBypassed
-            ? 'Biometric unlock is required, but biometrics are currently '
-                'unavailable on this device and the passcode fallback failed. '
-                'Your credentials were unlocked WITHOUT verification so they '
-                'stay readable. Re-enrol biometrics (system settings) to '
-                'restore the gate.'
-            : null),
+        launchSecurityWarningProvider.overrideWithValue(
+            unlock.gateBypassed || unlock.reEncryptionFailed
+                ? LaunchGateStatus(
+                    gateBypassed: unlock.gateBypassed,
+                    reEncryptionFailed: unlock.reEncryptionFailed,
+                  )
+                : null),
       ],
       child: const PicshellApp(),
     ),

@@ -10,12 +10,34 @@ final vaultServiceProvider = Provider<VaultService>((ref) {
   throw UnimplementedError('vaultServiceProvider must be overridden in main()');
 });
 
+/// Why the app must show a launch-security warning banner. Constructed in
+/// `main()` from the [LaunchUnlockResult] (see `performLaunchUnlock`); the
+/// banner widget (`LaunchGateBypassedBanner`) renders the user-facing text so
+/// that string construction stays out of `main()`.
+class LaunchGateStatus {
+  /// The gate was bypassed: the master key was released WITHOUT verification
+  /// because no prompt could be shown at all.
+  final bool gateBypassed;
+
+  /// Secrets left plaintext by an interrupted enable were detected, and the
+  /// automatic re-encryption under the verified key failed.
+  final bool reEncryptionFailed;
+
+  const LaunchGateStatus({
+    this.gateBypassed = false,
+    this.reEncryptionFailed = false,
+  });
+
+  bool get isEmpty => !gateBypassed && !reEncryptionFailed;
+}
+
 /// Non-null when the launch biometric gate could not be enforced (biometrics
-/// required but unavailable, and even the device-passcode fallback failed) and
-/// the master key was released without verification to preserve data
-/// availability. Overridden in `main()` with the warning message; the app
-/// shell shows it as a visible banner (see `LaunchGateBypassedBanner`).
-final launchSecurityWarningProvider = Provider<String?>((ref) => null);
+/// required but unavailable, and even the device-passcode fallback failed)
+/// and the master key was released without verification to preserve data
+/// availability, or when an interrupted enable could not be auto-repaired.
+/// Overridden in `main()`; the app shell shows it as a visible banner (see
+/// `LaunchGateBypassedBanner`).
+final launchSecurityWarningProvider = Provider<LaunchGateStatus?>((ref) => null);
 
 /// Whether the app is currently locked behind the biometric gate. True means
 /// the LockScreen is shown and credentials have not yet been released to the
