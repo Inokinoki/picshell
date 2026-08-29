@@ -62,7 +62,19 @@ class SshConnectionConfig {
   });
 }
 
-class SshService {
+/// Transport seam so the session lifecycle (connect / reconnect / teardown)
+/// can be driven by tests without a real SSH server.
+abstract interface class SshTransport {
+  Future<void> connect(SshConnectionConfig config);
+  void writeToTerminal(String data);
+  void resizeTerminal(int width, int height);
+  void dispose();
+  Stream<String> get output;
+  Stream<bool> get connectionState;
+  bool get isConnected;
+}
+
+class SshService implements SshTransport {
   SSHClient? _client;
   SSHSession? _session;
   final StreamController<String> _outputController =
@@ -73,8 +85,16 @@ class SshService {
   StreamSubscription<Uint8List>? _stderrSubscription;
   bool _disposed = false;
 
+  /// Splits a byte stream on UTF-8 sequence boundaries. Decoding each TCP
+  /// chunk in isolation corrupts any multibyte character (CJK, emoji) that
+  /// straddles two reads into U+FFFD replacement characters.
+  final _Utf8StreamDecoder _utf8 = _Utf8StreamDecoder();
+
+  @override
   Stream<String> get output => _outputController.stream;
+  @override
   Stream<bool> get connectionState => _connectionController.stream;
+  @override
   bool get isConnected => _client != null && _session != null;
 
   void _safeAddOutput(String data) {
@@ -89,19 +109,13 @@ class SshService {
     }
   }
 
-  void _safeAddConnectionError(Object e) {
-    if (!_disposed && !_connectionController.isClosed) {
-      _connectionController.addError(e);
-    }
-  }
-
+  @override
   Future<void> connect(SshConnectionConfig config) async {
+    SSHSocket? socket;
+    SSHClient? client;
     try {
-      _safeAddConnection(false);
+      socket = await SSHSocket.connect(config.host, config.port);
 
-      final socket = await SSHSocket.connect(config.host, config.port);
-
-      SSHClient client;
       switch (config.authMethod) {
         case SshAuthMethod.password:
           client = SSHClient(
@@ -139,13 +153,13 @@ class SshService {
       }
 
       _client = client;
-      _session = await client.shell(
+      _session = await _client!.shell(
         pty: const SSHPtyConfig(width: 80, height: 24, type: 'xterm-256color'),
       );
 
       _stdoutSubscription = _session!.stdout.listen(
-        (Uint8List data) => _safeAddOutput(utf8.decode(data, allowMalformed: true)),
-        onError: (e) {
+        (Uint8List data) => _safeAddOutput(_utf8.process(data)),
+        onError: (_) {
           _safeAddConnection(false);
         },
         onDone: () {
@@ -154,21 +168,34 @@ class SshService {
       );
 
       _stderrSubscription = _session!.stderr.listen(
-        (Uint8List data) => _safeAddOutput(utf8.decode(data, allowMalformed: true)),
-        onError: (e) {},
+        (Uint8List data) => _safeAddOutput(_utf8.process(data)),
+        onError: (_) {},
       );
 
       _safeAddConnection(true);
     } catch (e) {
-      _safeAddConnectionError(e);
+      // Close anything half-open so failed attempts don't leak sockets.
+      try {
+        client?.close();
+      } catch (_) {}
+      if (client == null) {
+        try {
+          socket?.close();
+        } catch (_) {}
+      }
+      _client = null;
+      _session = null;
+      _safeAddConnection(false);
       rethrow;
     }
   }
 
+  @override
   void writeToTerminal(String data) {
     _session?.write(utf8.encode(data));
   }
 
+  @override
   void resizeTerminal(int width, int height) {
     _session?.resizeTerminal(width, height);
   }
@@ -185,10 +212,57 @@ class SshService {
     _safeAddConnection(false);
   }
 
+  @override
   void dispose() {
     _disposed = true;
     disconnect();
     if (!_outputController.isClosed) _outputController.close();
     if (!_connectionController.isClosed) _connectionController.close();
+  }
+}
+
+/// Accumulates SSH output bytes and decodes them on UTF-8 sequence
+/// boundaries, holding back trailing incomplete sequences until the rest
+/// arrives (or the stream ends).
+class _Utf8StreamDecoder {
+  final List<int> _pending = [];
+
+  String process(Uint8List data) {
+    final Uint8List bytes;
+    if (_pending.isEmpty) {
+      bytes = data;
+    } else {
+      bytes = Uint8List.fromList([..._pending, ...data]);
+      _pending.clear();
+    }
+
+    // Inspect the tail: walk back over continuation bytes (0b10xxxxxx) to the
+    // lead byte of a possibly-truncated final sequence.
+    var holdback = 0;
+    final scanStart = bytes.length >= 4 ? bytes.length - 4 : 0;
+    for (var i = bytes.length - 1; i >= scanStart; i--) {
+      final b = bytes[i];
+      if (b & 0xC0 != 0x80) {
+        final expected =
+            b >= 0xF0 ? 3 : (b >= 0xE0 ? 2 : (b >= 0xC0 ? 1 : 0));
+        final continuations = bytes.length - 1 - i;
+        holdback = continuations < expected ? continuations + 1 : 0;
+        break;
+      }
+    }
+    // If the whole 4-byte window is continuation bytes the sequence start is
+    // older than the window; decode as-is and let the replacement character
+    // mark the corruption rather than buffering forever.
+
+    if (holdback > 0) {
+      _pending.addAll(bytes.sublist(bytes.length - holdback));
+    }
+
+    final end = bytes.length - holdback;
+    if (end <= 0) return '';
+    return utf8.decode(
+      Uint8List.sublistView(bytes, 0, end),
+      allowMalformed: true,
+    );
   }
 }

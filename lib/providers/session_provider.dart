@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -15,7 +14,7 @@ const _uuid = Uuid();
 class SessionState {
   final String id;
   final Host host;
-  final SshService sshService;
+  final SshTransport sshService;
   final Terminal terminal;
   final bool connected;
   final bool reconnecting;
@@ -43,7 +42,15 @@ final sessionListProvider =
 class SessionListNotifier extends StateNotifier<List<SessionState>> {
   final Ref _ref;
 
-  SessionListNotifier(this._ref) : super([]);
+  /// Seam for tests: drive the session lifecycle with fake transports
+  /// instead of real SSH connections.
+  final SshTransport Function() _transportFactory;
+
+  SessionListNotifier(
+    this._ref, {
+    @visibleForTesting SshTransport Function()? transportFactory,
+  })  : _transportFactory = transportFactory ?? SshService.new,
+        super([]);
 
   @visibleForTesting
   void debugAddSession(SessionState session) {
@@ -84,17 +91,12 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       },
     );
 
-    final service = SshService();
+    final service = _transportFactory();
     final terminal = Terminal(maxLines: 10000);
     final sessionId = _uuid.v4();
     final createdAt = DateTime.now();
 
-    terminal.onOutput = (data) {
-      service.writeToTerminal(data);
-    };
-    terminal.onResize = (width, height, pixelWidth, pixelHeight) {
-      service.resizeTerminal(width, height);
-    };
+    _bindTerminalIo(sessionId, terminal);
 
     terminal.onImageDecoded = (
       Uint8List bytes,
@@ -126,16 +128,25 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     );
     state = [...state, session];
 
-    service.output.listen((data) {
+    final outputSubscription = service.output.listen((data) {
       terminal.write(data);
     });
+    _outputSubscriptions[sessionId] = outputSubscription;
 
-    service.connectionState.listen((connected) {
-      if (!connected &&
-          !state.any((s) => s.id == session.id && s.reconnecting)) {
-        _scheduleReconnect(session.id);
-      }
-    });
+    service.connectionState.listen(
+      (connected) {
+        if (!connected &&
+            !state.any((s) => s.id == session.id && s.reconnecting)) {
+          _scheduleReconnect(session.id);
+        }
+      },
+      // A transport that errors mid-session has effectively disconnected.
+      onError: (_) {
+        if (!state.any((s) => s.id == session.id && s.reconnecting)) {
+          _scheduleReconnect(session.id);
+        }
+      },
+    );
 
     try {
       await service.connect(verifiedConfig);
@@ -148,6 +159,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
               sshService: s.sshService,
               terminal: s.terminal,
               connected: true,
+              config: s.config,
             )
           else
             s,
@@ -158,18 +170,39 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     }
   }
 
+  /// Terminal I/O must always target the session's CURRENT transport, so the
+  /// closures resolve the service from the state on every call instead of
+  /// capturing the first one — after a reconnect, keystrokes would otherwise
+  /// keep going to the disposed transport.
+  void _bindTerminalIo(String sessionId, Terminal terminal) {
+    SshTransport? currentService() {
+      for (final s in state) {
+        if (s.id == sessionId) return s.sshService;
+      }
+      return null;
+    }
+
+    terminal.onOutput = (data) => currentService()?.writeToTerminal(data);
+    terminal.onResize = (width, height, pixelWidth, pixelHeight) {
+      currentService()?.resizeTerminal(width, height);
+    };
+  }
+
   void closeSession(String id) {
     final session = state.firstWhere(
       (s) => s.id == id,
       orElse: () => throw StateError('Not found'),
     );
     _reconnectTimers.remove(id)?.cancel();
+    _reconnectAttempts.remove(id);
+    _outputSubscriptions.remove(id)?.cancel();
     session.sshService.dispose();
     state = state.where((s) => s.id != id).toList();
   }
 
   final Map<String, Timer> _reconnectTimers = {};
   final Map<String, int> _reconnectAttempts = {};
+  final Map<String, StreamSubscription<String>> _outputSubscriptions = {};
 
   void _scheduleReconnect(String sessionId) {
     if (!mounted) return;
@@ -194,7 +227,8 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
 
     final attempts = (_reconnectAttempts[sessionId] ?? 0) + 1;
     _reconnectAttempts[sessionId] = attempts;
-    final delay = Duration(seconds: (attempts * 2).clamp(1, 30));
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, then capped at 30s.
+    final delay = Duration(seconds: (1 << (attempts - 1)).clamp(1, 30));
 
     _reconnectTimers[sessionId]?.cancel();
     _reconnectTimers[sessionId] = Timer(delay, () async {
@@ -204,18 +238,27 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
 
       try {
         current.sshService.dispose();
-        final newService = SshService();
+        final newService = _transportFactory();
 
-        newService.output.listen((data) {
+        _outputSubscriptions[sessionId]?.cancel();
+        _outputSubscriptions[sessionId] = newService.output.listen((data) {
           current.terminal.write(data);
         });
 
-        newService.connectionState.listen((connected) {
-          if (!connected &&
-              state.any((s) => s.id == sessionId && !s.reconnecting)) {
-            _scheduleReconnect(sessionId);
-          }
-        });
+        newService.connectionState.listen(
+          (connected) {
+            if (!connected &&
+                state.any((s) => s.id == sessionId && !s.reconnecting)) {
+              _scheduleReconnect(sessionId);
+            }
+          },
+          onError: (_) {
+            if (mounted &&
+                state.any((s) => s.id == sessionId && !s.reconnecting)) {
+              _scheduleReconnect(sessionId);
+            }
+          },
+        );
 
         await newService.connect(current.config!);
         _reconnectAttempts.remove(sessionId);
