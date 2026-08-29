@@ -114,7 +114,8 @@ void main() {
       // seconds on the emulator.
       bool connected = false;
       for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
+        await Future<void>.delayed(const Duration(seconds: 1));
+        await tester.pump();
         final sessions = container.read(sessionListProvider);
         if (sessions.isNotEmpty && sessions.first.connected) {
           connected = true;
@@ -162,7 +163,8 @@ void main() {
       // Wait for the session to be connected and the shell to be ready.
       bool connected = false;
       for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
+        await Future<void>.delayed(const Duration(seconds: 1));
+        await tester.pump();
         final sessions = container.read(sessionListProvider);
         if (sessions.isNotEmpty && sessions.first.connected) {
           connected = true;
@@ -175,13 +177,15 @@ void main() {
 
       // Give the remote shell a moment to finish its MOTD / prompt, then send
       // the command that emits the OSC 1337 image sequence.
-      await tester.pump(const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await tester.pump();
       terminal.textInput('bash /tmp/send.sh\n');
 
       // Poll for the floating image to appear (SSH round-trip + decode).
       bool imageAppeared = false;
       for (int i = 0; i < 30; i++) {
-        await tester.pump(const Duration(seconds: 1));
+        await Future<void>.delayed(const Duration(seconds: 1));
+        await tester.pump();
         if (container.read(floatingImagesProvider).isNotEmpty) {
           imageAppeared = true;
           break;
@@ -238,7 +242,8 @@ void main() {
           .openSession(host, config);
 
       for (int i = 0; i < 60; i++) {
-        await tester.pump(const Duration(seconds: 1));
+        await Future<void>.delayed(const Duration(seconds: 1));
+        await tester.pump();
         if (container
             .read(sessionListProvider)
             .isNotEmpty && container.read(sessionListProvider).first.connected) {
@@ -247,11 +252,13 @@ void main() {
       }
 
       final terminal = container.read(sessionListProvider).first.terminal;
-      await tester.pump(const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await tester.pump();
       terminal.textInput('bash /tmp/send.sh\n');
 
       for (int i = 0; i < 30; i++) {
-        await tester.pump(const Duration(seconds: 1));
+        await Future<void>.delayed(const Duration(seconds: 1));
+        await tester.pump();
         if (container.read(floatingImagesProvider).isNotEmpty) break;
       }
       expect(container.read(floatingImagesProvider), isNotEmpty,
