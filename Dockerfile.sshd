@@ -1,0 +1,30 @@
+# Real-OpenSSH target for picshell tests (mirrors the repo CI intent of
+# `picshell-sshd:local`): root/testpass on port 22, plus /tmp/send.sh which
+# emits the iTerm2 OSC 1337 sequence the integration test asserts on
+# (name=t.png, width=80, height=40).
+#
+# Build:  docker build -t picshell-sshd:local -f Dockerfile.sshd .
+# Run:    docker run -d --name picshell-sshd -p 2222:22 picshell-sshd:local
+FROM alpine:3.20
+
+RUN apk add --no-cache openssh bash bash-completion zlib
+
+# Password auth for root, matching the tests' hardcoded credentials.
+RUN echo 'root:testpass' | chpasswd \
+ && sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+ && sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+ && echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
+
+# 1x1 red PNG so send.sh can emit a genuinely decodable image.
+RUN printf '\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90\x77\x53\xde\x00\x00\x00\x0c\x49\x44\x41\x54\x08\xd7\x63\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82' > /tmp/test.png
+
+# send.sh: OSC 1337 File= sequence; params must match the integration test
+# (requestedWidth 80, requestedHeight 40, name 't.png').
+RUN printf '#!/bin/bash\nSIZE=$(stat -c%%s /tmp/test.png)\nB64=$(base64 -w0 /tmp/test.png)\nNAME=$(printf t.png | base64)\nprintf "\\033]1337;File=name=%%s;width=80;height=40;inline=1;preserveAspectRatio=1:%%s\\a" "$NAME" "$B64"\n' > /tmp/send.sh \
+ && chmod +x /tmp/send.sh \
+ && printf '#!/bin/bash\ncat /tmp/send.sh >/dev/null\n/tmp/send.sh; echo\n' > /usr/local/bin/imgcat \
+ && chmod +x /usr/local/bin/imgcat
+
+RUN ssh-keygen -A
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D", "-e"]

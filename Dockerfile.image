@@ -22,6 +22,12 @@ RUN mkdir /var/run/sshd && \
 # Create output directory
 RUN mkdir -p /test_output /output
 
+# Remote helper the test types into the app's terminal: prints a tiny PNG as
+# an iTerm2 OSC 1337 inline image.
+RUN printf '#!/bin/bash\nSIZE=$(stat -c%%s /tmp/test.png)\nB64=$(base64 -w0 /tmp/test.png)\nprintf "\\033]1337;File=inline=1;size=%%d:%%s\\a\\n" "$SIZE" "$B64"\n' > /usr/local/bin/test_image \
+    && chmod +x /usr/local/bin/test_image \
+    && printf '\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90\x77\x53\xde\x00\x00\x00\x0c\x49\x44\x41\x54\x08\xd7\x63\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82' > /tmp/test.png
+
 COPY build/linux/arm64/release/bundle/ /app/
 COPY test_image.sh /test_image.sh
 RUN chmod +x /test_image.sh

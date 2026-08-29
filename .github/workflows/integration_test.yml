@@ -23,6 +23,17 @@ jobs:
 
       - run: flutter pub get
 
+      # The SSH integration tests need a real sshd on 127.0.0.1:2222 with
+      # root/testpass (the credentials they are written against). Build and
+      # run the throwaway target from the repo's test Dockerfile, then map
+      # the emulator's localhost:2222 onto it with adb reverse.
+      - name: Start sshd test container
+        run: |
+          docker build -t picshell-sshd:local -f Dockerfile.sshd .
+          docker run -d --name picshell-sshd -p 2222:22 picshell-sshd:local
+          sleep 3
+          docker logs picshell-sshd
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0777", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -39,7 +50,9 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_5
-          script: flutter test integration_test/ -d emulator-5554
+          script: |
+            adb reverse tcp:2222 tcp:2222
+            flutter test integration_test/ -d emulator-5554
 
       - name: Upload test screenshots
         if: always()
