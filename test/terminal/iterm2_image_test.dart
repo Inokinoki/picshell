@@ -129,7 +129,7 @@ void main() {
       );
     });
 
-    test('should handle empty payload after colon', () {
+    test('should drop empty payload after colon', () {
       Uint8List? receivedBytes;
       terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
         receivedBytes = bytes;
@@ -137,8 +137,9 @@ void main() {
 
       terminal.unknownOSC('1337', ['File=inline=1:']);
 
-      expect(receivedBytes, isNotNull);
-      expect(receivedBytes!.length, 0);
+      // An empty image produces a blank floating window, so the terminal
+      // must not emit it.
+      expect(receivedBytes, isNull);
     });
 
     test('should parse name parameter correctly', () {

@@ -1,7 +1,6 @@
 import 'dart:convert' show base64, utf8;
 import 'dart:math' show max;
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:xterm/src/base/observable.dart';
 import 'package:xterm/src/core/buffer/buffer.dart';
@@ -22,31 +21,6 @@ import 'package:xterm/src/core/state.dart';
 import 'package:xterm/src/core/tabs.dart';
 import 'package:xterm/src/utils/ascii.dart';
 import 'package:xterm/src/utils/circular_buffer.dart';
-
-class Iterm2Image {
-  final ui.Image image;
-  final int cursorRow;
-  final String? widthStr;
-  final String? heightStr;
-
-  Iterm2Image({
-    required this.image,
-    required this.cursorRow,
-    this.widthStr,
-    this.heightStr,
-  });
-
-  int? get width => widthStr != null
-      ? int.tryParse(widthStr!.replaceAll(RegExp(r'[^0-9]'), ''))
-      : null;
-  int? get height => heightStr != null
-      ? int.tryParse(heightStr!.replaceAll(RegExp(r'[^0-9]'), ''))
-      : null;
-  bool get widthIsPixels => widthStr?.endsWith('px') == true;
-  bool get heightIsPixels => heightStr?.endsWith('px') == true;
-  bool get widthIsPercent => widthStr?.endsWith('%') == true;
-  bool get heightIsPercent => heightStr?.endsWith('%') == true;
-}
 
 /// [Terminal] is an interface to interact with command line applications. It
 /// translates escape sequences from the application into updates to the
@@ -980,10 +954,24 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   // chunks append data; FileEnd closes and emits the assembled image.
   _MultipartState? _multipart;
 
+  /// Upper bound for a single image transfer (encoded base64 body). A remote
+  /// host could otherwise stream an unbounded multipart sequence (or announce
+  /// a huge `size=`) and accumulate memory for the lifetime of the session.
+  static const maxImageTransferBytes = 16 * 1024 * 1024; // 16 MiB
+
+  /// Encoded-length budget for a transfer. Transfers longer than
+  /// [maxImageTransferBytes] are rejected outright; `size=` is base64 length
+  /// ≈ 4/3 × decoded bytes, so decode the announced value conservatively.
+  static const _maxEncodedImageLength = maxImageTransferBytes * 4 ~/ 3;
+
   void _handleMultipartFile(List<String> pt) {
     // MultipartFile=params — params use the same key=value;key=value syntax.
     final paramsStr = pt.join(';').substring('MultipartFile='.length);
     final params = _parseIterm2Params(paramsStr) ?? <String, String>{};
+    final announced = int.tryParse(params['size'] ?? '');
+    if (announced != null && announced > maxImageTransferBytes) {
+      return; // announced transfer exceeds the budget — reject up front
+    }
     _multipart = _MultipartState(params: params, buffer: StringBuffer());
   }
 
@@ -993,45 +981,51 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     // FilePart=base64 — rejoin by ';' in case the payload contained a ';' that
     // got split (base64 itself has none, so this is just defensive).
     final chunk = pt.join(';').substring('FilePart='.length);
+    if (m.buffer.length + chunk.length > _maxEncodedImageLength) {
+      // Runaway transfer (FileEnd never sent / oversized) — drop it entirely.
+      _multipart = null;
+      return;
+    }
     m.buffer.write(chunk);
   }
 
   void _handleFileEnd() {
     final m = _multipart;
     _multipart = null;
-    if (m == null) return;
+    if (m == null || m.buffer.isEmpty) return;
     _decodeAndEmit(m.buffer.toString(), m.params);
   }
 
   /// Decodes base64 image data and fires [onImageDecoded] with normalised
   /// parameters. Pure params → callback translation; no terminal state.
   void _decodeAndEmit(String base64Data, Map<String, String> params) {
+    final Uint8List bytes;
     try {
-      final bytes = base64.decode(base64Data);
-      // name is base64-encoded per spec; fall back to raw if decode fails.
-      final nameRaw = params['name'];
-      final name = nameRaw == null
-          ? '__default__'
-          : (tryDecodeBase64Str(nameRaw) ?? nameRaw);
-      final inline = params['inline'] == '1';
-      final preserveAspectRatio = params['preserveAspectRatio'] != '0';
-      final widthVal = _parseDimension(params['width']);
-      final heightVal = _parseDimension(params['height']);
-
-      if (onImageDecoded != null) {
-        onImageDecoded!(
-          bytes,
-          name,
-          widthVal,
-          heightVal,
-          inline: inline,
-          preserveAspectRatio: preserveAspectRatio,
-        );
-      }
+      bytes = base64.decode(base64Data);
     } catch (_) {
       // Malformed payload — silently drop, matching the no-op behaviour of
       // other unsupported escape sequences.
+      return;
     }
+    if (bytes.isEmpty) return;
+
+    // name is base64-encoded per spec; fall back to raw if decode fails.
+    final nameRaw = params['name'];
+    final name =
+        nameRaw == null ? '__default__' : (tryDecodeBase64Str(nameRaw) ?? nameRaw);
+    final inline = params['inline'] == '1';
+    final preserveAspectRatio = params['preserveAspectRatio'] != '0';
+    final widthVal = _parseDimension(params['width']);
+    final heightVal = _parseDimension(params['height']);
+
+    onImageDecoded?.call(
+      bytes,
+      name,
+      widthVal,
+      heightVal,
+      inline: inline,
+      preserveAspectRatio: preserveAspectRatio,
+    );
   }
 
   /// Parses an iTerm2 dimension param into a numeric pixel value when possible.

@@ -497,9 +497,11 @@ class EscapeParser {
           handler.setForegroundColor16(NamedColor.white);
           continue;
         case 38:
+          if (i + 1 >= params.length) continue;
           final mode = params[i + 1];
           switch (mode) {
             case 2:
+              if (i + 4 >= params.length) continue;
               final r = params[i + 2];
               final g = params[i + 3];
               final b = params[i + 4];
@@ -507,6 +509,7 @@ class EscapeParser {
               i += 4;
               break;
             case 5:
+              if (i + 2 >= params.length) continue;
               final index = params[i + 2];
               handler.setForegroundColor256(index);
               i += 2;
@@ -542,9 +545,11 @@ class EscapeParser {
           handler.setBackgroundColor16(NamedColor.white);
           continue;
         case 48:
+          if (i + 1 >= params.length) continue;
           final mode = params[i + 1];
           switch (mode) {
             case 2:
+              if (i + 4 >= params.length) continue;
               final r = params[i + 2];
               final g = params[i + 3];
               final b = params[i + 4];
@@ -552,6 +557,7 @@ class EscapeParser {
               i += 4;
               break;
             case 5:
+              if (i + 2 >= params.length) continue;
               final index = params[i + 2];
               handler.setBackgroundColor256(index);
               i += 2;
@@ -1083,9 +1089,15 @@ class EscapeParser {
 
   final _osc = <String>[];
 
+  /// Upper bound for a single OSC sequence body. Guards against a remote
+  /// host streaming an unbounded sequence (e.g. a giant image payload) that
+  /// would otherwise accumulate without limit and spike memory.
+  static const _maxOscLength = 1 << 22; // 4M chars
+
   bool _consumeOsc() {
     _osc.clear();
     final param = StringBuffer();
+    var overflow = false;
 
     while (true) {
       if (_queue.isEmpty) {
@@ -1096,7 +1108,7 @@ class EscapeParser {
 
       // OSC terminates with BEL
       if (char == Ascii.BEL) {
-        _osc.add(param.toString());
+        if (!overflow) _osc.add(param.toString());
         return true;
       }
 
@@ -1107,7 +1119,7 @@ class EscapeParser {
         }
 
         if (_queue.consume() == Ascii.backslash) {
-          _osc.add(param.toString());
+          if (!overflow) _osc.add(param.toString());
         }
 
         return true;
@@ -1115,12 +1127,22 @@ class EscapeParser {
 
       /// Parse next parameter
       if (char == Ascii.semicolon) {
-        _osc.add(param.toString());
+        if (!overflow) _osc.add(param.toString());
         param.clear();
         continue;
       }
 
-      param.writeCharCode(char);
+      if (!overflow && param.length >= _maxOscLength) {
+        // Over-limit sequence: keep consuming to the terminator but discard
+        // the whole body so it dispatches as a no-op.
+        overflow = true;
+        _osc.clear();
+        param.clear();
+      }
+
+      if (!overflow) {
+        param.writeCharCode(char);
+      }
     }
   }
 }
