@@ -24,11 +24,14 @@ class ModifierTracker {
   static bool enableDebugLogging = false;
 
   bool _altHeld = false;
+  bool _initialized = false;
 
   bool get isZoomModifierHeld => _altHeld;
 
   /// Register once at app startup (idempotent).
   void init() {
+    if (_initialized) return;
+    _initialized = true;
     HardwareKeyboard.instance.addHandler(_onKey);
   }
 
@@ -121,12 +124,27 @@ class FloatingImageWidget extends ConsumerStatefulWidget {
 }
 
 class _FloatingImageWidgetState extends ConsumerState<FloatingImageWidget> {
+  /// Cap on decoded pixel dimensions. A small PNG can declare e.g.
+  /// 20000×20000 and allocate ~1.6 GB when decoded — the provider's raw-byte
+  /// budget does not bound decoded pixels, so decode at a bounded resolution.
+  static const _maxDecodeDimension = 4096;
+
   ui.Image? _decodedImage;
   bool _isLoading = true;
+  bool _decodeCancelled = false;
 
   /// Scale captured on gesture start, used to compute absolute scale from the
   /// relative `details.scale` and avoid drift across multiple callbacks.
   double _scaleAtGestureStart = 1.0;
+
+  /// The provider state replaces [widget.image] on every update; gesture
+  /// handlers must read the live object or they compute from stale positions.
+  FloatingImage? _liveImage(String id) {
+    for (final img in ref.read(floatingImagesProvider)) {
+      if (img.id == id) return img;
+    }
+    return null;
+  }
 
   @override
   void initState() {
@@ -142,55 +160,88 @@ class _FloatingImageWidgetState extends ConsumerState<FloatingImageWidget> {
     }
   }
 
+  @override
+  void dispose() {
+    _decodeCancelled = true;
+    _decodedImage?.dispose();
+    _decodedImage = null;
+    super.dispose();
+  }
+
   Future<void> _decodeImage() async {
     setState(() {
       _isLoading = true;
     });
+    ui.ImmutableBuffer? buffer;
+    ui.ImageDescriptor? descriptor;
+    ui.Codec? codec;
+    ui.Image? decoded;
     try {
-      final codec = await ui.instantiateImageCodec(widget.image.rawBytes);
+      buffer = await ui.ImmutableBuffer.fromUint8List(widget.image.rawBytes);
+      descriptor = await ui.ImageDescriptor.encoded(buffer);
+      var targetW = descriptor.width;
+      var targetH = descriptor.height;
+      final largest = targetW > targetH ? targetW : targetH;
+      if (largest > _maxDecodeDimension) {
+        final factor = _maxDecodeDimension / largest;
+        targetW = (targetW * factor).round().clamp(1, _maxDecodeDimension);
+        targetH = (targetH * factor).round().clamp(1, _maxDecodeDimension);
+      }
+      codec = await descriptor.instantiateCodec(
+        targetWidth: targetW,
+        targetHeight: targetH,
+      );
       final frame = await codec.getNextFrame();
-      if (mounted) {
-        // Compute the base size outside setState so a viewport lookup failure
-        // (e.g. in headless tests) doesn't corrupt the decoded-image state.
-        Size? newSize;
-        if (widget.image.size == Size.zero) {
-          try {
-            final view = View.of(context);
-            newSize = computeBaseDisplaySize(
-              decodedWidth: frame.image.width,
-              decodedHeight: frame.image.height,
-              requestedWidth: widget.image.requestedWidth,
-              requestedHeight: widget.image.requestedHeight,
-              viewport: Size(
-                view.physicalSize.width / view.devicePixelRatio,
-                view.physicalSize.height / view.devicePixelRatio,
-              ),
-            );
-          } catch (_) {
-            // Viewport unavailable (headless test): fall back to raw pixels.
-            newSize = Size(frame.image.width.toDouble(),
-                frame.image.height.toDouble());
-          }
+      decoded = frame.image;
+
+      if (!mounted || _decodeCancelled) {
+        decoded.dispose();
+        return;
+      }
+
+      // Compute the base size outside setState so a viewport lookup failure
+      // (e.g. in headless tests) doesn't corrupt the decoded-image state.
+      Size? newSize;
+      if (widget.image.size == Size.zero) {
+        try {
+          final view = View.of(context);
+          newSize = computeBaseDisplaySize(
+            decodedWidth: decoded.width,
+            decodedHeight: decoded.height,
+            requestedWidth: widget.image.requestedWidth,
+            requestedHeight: widget.image.requestedHeight,
+            viewport: Size(
+              view.physicalSize.width / view.devicePixelRatio,
+              view.physicalSize.height / view.devicePixelRatio,
+            ),
+          );
+        } catch (_) {
+          // Viewport unavailable (headless test): fall back to raw pixels.
+          newSize =
+              Size(decoded.width.toDouble(), decoded.height.toDouble());
         }
-        setState(() {
-          _decodedImage = frame.image;
-          _isLoading = false;
-          if (newSize != null) {
-            widget.image.size = newSize;
-          }
-        });
-        if (newSize != null) {
-          ref
-              .read(floatingImagesProvider.notifier)
-              .updateSize(widget.image.id, widget.image.size);
-        }
+      }
+      setState(() {
+        _decodedImage?.dispose();
+        _decodedImage = decoded;
+        _isLoading = false;
+      });
+      if (newSize != null) {
+        ref
+            .read(floatingImagesProvider.notifier)
+            .updateSize(widget.image.id, newSize);
       }
     } catch (_) {
+      decoded?.dispose();
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
       }
+    } finally {
+      codec?.dispose();
+      descriptor?.dispose();
+      buffer?.dispose();
     }
   }
 
@@ -202,9 +253,21 @@ class _FloatingImageWidgetState extends ConsumerState<FloatingImageWidget> {
     final renderSize =
         Size(baseSize.width * img.scale, baseSize.height * img.scale);
 
+    // Clamp the rendered position so an image can never be dragged fully
+    // off-screen (it would become unreachable — no gesture or tab reaches it).
+    final screenSize = MediaQuery.sizeOf(context);
+    final left = img.position.dx.clamp(
+      0.0,
+      (screenSize.width - 40).clamp(0.0, double.infinity),
+    );
+    final top = img.position.dy.clamp(
+      0.0,
+      (screenSize.height - 40).clamp(0.0, double.infinity),
+    );
+
     return Positioned(
-      left: img.position.dx,
-      top: img.position.dy,
+      left: left,
+      top: top,
       // Listener captures the mouse wheel; translucent behaviour lets the
       // arena below also see plain scrolls so they reach the terminal. We zoom
       // only when a modifier (Cmd/Ctrl) is held, queried from the global
@@ -229,30 +292,38 @@ class _FloatingImageWidgetState extends ConsumerState<FloatingImageWidget> {
             if (ModifierTracker.enableDebugLogging) {
               debugPrint('[FloatingImage] scroll dy=${signal.scrollDelta.dy} '
                   'tracker=${tracker.isZoomModifierHeld} '
-                  'HK=${pressed}');
+                  'HK=$pressed');
             }
             if (mod) {
               final factor = signal.scrollDelta.dy < 0 ? 1.1 : (1 / 1.1);
-              ref
-                  .read(floatingImagesProvider.notifier)
-                  .updateScale(img.id, img.scale * factor);
+              final current = _liveImage(img.id);
+              if (current != null) {
+                ref
+                    .read(floatingImagesProvider.notifier)
+                    .updateScale(img.id, current.scale * factor);
+              }
             }
           }
         },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onScaleStart: (details) {
-            _scaleAtGestureStart = img.scale;
+            _scaleAtGestureStart = _liveImage(img.id)?.scale ?? 1.0;
           },
           onScaleUpdate: (details) {
             final notifier = ref.read(floatingImagesProvider.notifier);
+            final current = _liveImage(img.id);
+            if (current == null) return;
             if (details.pointerCount >= 2) {
               // Two-finger pinch: relative scale to gesture start.
-              notifier.updateScale(img.id, _scaleAtGestureStart * details.scale);
+              notifier.updateScale(
+                  img.id, _scaleAtGestureStart * details.scale);
             } else {
               // Single pointer (mouse drag / one finger): move the image.
+              // Compute from the live position: multiple pointer callbacks
+              // can fire between rebuilds and stale positions drop deltas.
               notifier.updatePosition(
-                  img.id, img.position + details.focalPointDelta);
+                  img.id, current.position + details.focalPointDelta);
             }
           },
           child: Material(
@@ -346,10 +417,12 @@ class _FloatingImageWidgetState extends ConsumerState<FloatingImageWidget> {
                           onPanUpdate: (deltaY) {
                             final notifier = ref
                                 .read(floatingImagesProvider.notifier);
+                            final current = _liveImage(img.id);
+                            if (current == null) return;
                             // Drag down = grow (positive deltaY → larger scale).
                             final factor = 1 + deltaY * 0.005;
                             notifier.updateScale(
-                                img.id, img.scale * factor);
+                                img.id, current.scale * factor);
                           },
                         ),
                       ),

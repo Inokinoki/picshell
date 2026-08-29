@@ -158,12 +158,15 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
 
     final buffer = widget.terminal.buffer;
     final text = StringBuffer();
+    // The raw selection is anchored at the drag start; normalise so
+    // right-to-left / bottom-to-top selections iterate the same range.
+    final range = selection.normalized;
 
-    for (var y = selection.begin.y; y <= selection.end.y; y++) {
+    for (var y = range.begin.y; y <= range.end.y; y++) {
       final line = buffer.lines[y];
 
-      final startX = y == selection.begin.y ? selection.begin.x : 0;
-      final endX = y == selection.end.y ? selection.end.x : line.length - 1;
+      final startX = y == range.begin.y ? range.begin.x : 0;
+      final endX = y == range.end.y ? range.end.x : line.length - 1;
 
       for (var x = startX; x <= endX; x++) {
         final charCode = line.getCodePoint(x);
@@ -172,7 +175,7 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
         }
       }
 
-      if (y < selection.end.y) {
+      if (y < range.end.y) {
         text.write('\n');
       }
     }
@@ -192,8 +195,9 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
     _resetModifiers();
   }
 
-  void _paste() async {
+  Future<void> _paste() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
     if (data?.text != null) {
       widget.terminal.textInput(data!.text!);
     }

@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -183,9 +182,13 @@ class HomeScreen extends ConsumerWidget {
         keyType: e.keyType,
         fingerprintHex: e.fingerprint,
       );
-      if (trust != true || !context.mounted) {
+      // Re-check after the dialog: the screen may have been unmounted while
+      // it was open, in which case there is nothing to show.
+      if (!context.mounted) return;
+      if (trust != true) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Connection aborted: host not trusted.')),
+          const SnackBar(
+              content: Text('Connection aborted: host not trusted.')),
         );
         return;
       }

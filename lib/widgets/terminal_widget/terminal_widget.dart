@@ -16,7 +16,10 @@ class TerminalWidget extends ConsumerStatefulWidget {
 }
 
 class _TerminalWidgetState extends ConsumerState<TerminalWidget>
-    with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
+    with WidgetsBindingObserver {
+  // NOTE: no AutomaticKeepAliveClientMixin here — keep-alive only functions
+  // under keep-alive-aware parents (IndexedStack/slivers), and this widget is
+  // built in a plain subtree, so the mixin was dead code.
   late final KeyboardVisibilityController _keyboardController;
   late final StreamSubscription<bool> _keyboardSubscription;
   late final TerminalController _terminalController;
@@ -57,12 +60,7 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
   }
 
   @override
-  bool get wantKeepAlive => true;
-
-  @override
   Widget build(BuildContext context) {
-    super.build(context);
-
     final settings = ref.watch(settingsProvider);
 
     bool showKeyboard;
