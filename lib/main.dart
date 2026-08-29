@@ -1,5 +1,9 @@
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:picshell/app/app.dart';
@@ -28,6 +32,7 @@ void main() async {
 
   final hostStore = HostStore();
   await hostStore.init();
+  await _enableSecretEncryption(hostStore);
 
   final knownHostsStore = KnownHostsStore();
   await knownHostsStore.init();
@@ -41,4 +46,29 @@ void main() async {
       child: const PicshellApp(),
     ),
   );
+}
+
+/// Gives the store a master passphrase so secrets are actually encrypted at
+/// rest. The passphrase is a random 256-bit key generated on first launch and
+/// kept in the platform secure store (Windows DPAPI / Keychain / Keystore) —
+/// without this the SecretCipher layer passes everything through in
+/// cleartext.
+Future<void> _enableSecretEncryption(HostStore hostStore) async {
+  const storage = FlutterSecureStorage();
+  const keyName = 'picshell.master_key';
+  try {
+    var key = await storage.read(key: keyName);
+    if (key == null || key.isEmpty) {
+      final bytes = Uint8List.fromList(
+        List.generate(32, (_) => Random.secure().nextInt(256)),
+      );
+      key = base64.encode(bytes);
+      await storage.write(key: keyName, value: key);
+    }
+    hostStore.setPassphrase(key);
+  } catch (e) {
+    // No secure storage (or it failed): fall back to cleartext rather than
+    // losing access to saved credentials entirely.
+    debugPrint('secure storage unavailable, secrets stay unencrypted: $e');
+  }
 }

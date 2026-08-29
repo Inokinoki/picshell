@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:hive/hive.dart';
 import '../models/host.dart';
 import '../models/ssh_key.dart';
@@ -72,8 +75,15 @@ class HostStore {
   Host _decryptHost(Host host) {
     if (host.password == null || host.password!.isEmpty) return host;
     final plain = _cipher.decrypt(host.password!);
-    // If decryption fails (e.g. passphrase mismatch, or the value was never
-    // encrypted), fall back to the stored value rather than losing the host.
+    // If decryption fails the value was either cleartext (pre-encryption
+    // data, to be migrated) or was encrypted under a different key (a wrong
+    // passphrase — never touch it).
+    if (plain == null) {
+      if (!_looksEncrypted(host.password!)) {
+        _migrateHost(host);
+      }
+      return host;
+    }
     return Host(
       id: host.id,
       name: host.name,
@@ -82,9 +92,15 @@ class HostStore {
       username: host.username,
       authType: host.authType,
       keyId: host.keyId,
-      password: plain ?? host.password,
+      password: plain,
       groupId: host.groupId,
     );
+  }
+
+  /// Best-effort: persist the encrypted form of a secret that was stored in
+  /// cleartext before encryption was enabled.
+  void _migrateHost(Host host) {
+    unawaited(_hosts.put(host.id, _encryptHost(host)));
   }
 
   // SSH Key CRUD
@@ -114,12 +130,32 @@ class HostStore {
 
   SshKey _decryptKey(SshKey key) {
     final plain = _cipher.decrypt(key.privateKeyPem);
+    if (plain == null) {
+      if (!_looksEncrypted(key.privateKeyPem)) {
+        unawaited(_keys.put(key.id, _encryptKey(key)));
+      }
+      return key;
+    }
     return SshKey(
       id: key.id,
       name: key.name,
-      privateKeyPem: plain ?? key.privateKeyPem,
+      privateKeyPem: plain,
       publicKey: key.publicKey,
     );
+  }
+
+  /// Heuristic for "this value was produced by [SecretCipher]" — our
+  /// ciphertext is base64(IV || AES-CBC), so it always base64-decodes to a
+  /// non-empty multiple of the 16-byte block size with a 16-byte IV. Real
+  /// secrets (passwords, PEMs) essentially never match that shape.
+  bool _looksEncrypted(String value) {
+    List<int> decoded;
+    try {
+      decoded = base64.decode(value);
+    } on FormatException {
+      return false;
+    }
+    return decoded.length >= 32 && decoded.length % 16 == 0;
   }
 
   // Session CRUD
