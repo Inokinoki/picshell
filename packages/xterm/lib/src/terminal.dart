@@ -1,4 +1,5 @@
 import 'dart:convert' show base64, utf8;
+import 'dart:io' show File, FileMode, Platform;
 import 'dart:math' show max;
 import 'dart:typed_data';
 
@@ -377,7 +378,18 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     newWidth = max(newWidth, 1);
     newHeight = max(newHeight, 1);
 
-    onResize?.call(newWidth, newHeight, pixelWidth ?? 0, pixelHeight ?? 0);
+    // Temporary diagnostics (PICSHELL_SSH_TRACE=1).
+    if (Platform.environment['PICSHELL_SSH_TRACE'] == '1') {
+      try {
+        File(
+                '${Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '.'}'
+                '/Documents/picshell_ssh_trace.log')
+            .writeAsStringSync(
+                '[terminal.resize] ${_viewWidth}x$_viewHeight -> '
+                '${newWidth}x${newHeight} hash=$hashCode\r\n',
+                mode: FileMode.append);
+      } catch (_) {}
+    }
 
     //we need to resize both buffers so that they are ready when we switch between them
     _altBuffer.resize(_viewWidth, _viewHeight, newWidth, newHeight);
@@ -385,6 +397,10 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
     _viewWidth = newWidth;
     _viewHeight = newHeight;
+
+    // Notify after the state is consistent: a throwing listener must not
+    // leave the terminal half-resized.
+    onResize?.call(newWidth, newHeight, pixelWidth ?? 0, pixelHeight ?? 0);
 
     if (buffer == _altBuffer) {
       buffer.clearScrollback();

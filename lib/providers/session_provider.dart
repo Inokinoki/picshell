@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -39,8 +40,10 @@ final sessionListProvider =
       return SessionListNotifier(ref);
     });
 
-final selectedSessionSizeProvider =
-    StateProvider<({int width, int height})?>((ref) => null);
+/// Last known terminal geometry, recorded by the terminal view on resize and
+/// used to seed new sessions so the remote pty matches the window from the
+/// first frame.
+({int width, int height})? lastKnownTerminalSize;
 
 class SessionListNotifier extends StateNotifier<List<SessionState>> {
   final Ref _ref;
@@ -104,7 +107,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     // very first pty resize (applied when the shell channel opens) matches
     // the window — otherwise the remote stays at the default geometry until
     // the user resizes the window.
-    final lastSize = _ref.read(selectedSessionSizeProvider);
+    final lastSize = lastKnownTerminalSize;
     if (lastSize != null) {
       terminal.resize(lastSize.width, lastSize.height);
     }
@@ -143,6 +146,10 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
 
     final outputSubscription = service.output.listen((data) {
       terminal.write(data);
+      if (kDebugMode &&
+          Platform.environment['PICSHELL_SSH_TRACE'] == '1') {
+        SshService.traceCursorState(terminal);
+      }
     });
     _outputSubscriptions[sessionId] = outputSubscription;
 
@@ -208,9 +215,18 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     }
 
     terminal.onOutput = (data) => currentService()?.writeToTerminal(data);
+    if (kDebugMode &&
+        Platform.environment['PICSHELL_SSH_TRACE'] == '1') {
+      SshService.traceEvent(
+          'bind terminal hash=${identityHashCode(terminal)}');
+    }
     terminal.onResize = (width, height, pixelWidth, pixelHeight) {
-      _ref.read(selectedSessionSizeProvider.notifier).state =
-          (width: width, height: height);
+      if (kDebugMode &&
+          Platform.environment['PICSHELL_SSH_TRACE'] == '1') {
+        SshService.traceEvent('onResize w=$width h=$height '
+            'hash=${identityHashCode(terminal)}');
+      }
+      lastKnownTerminalSize = (width: width, height: height);
       currentService()?.resizeTerminal(width, height);
     };
   }

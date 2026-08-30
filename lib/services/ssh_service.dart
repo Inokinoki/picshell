@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
+import 'package:xterm/xterm.dart' show Terminal;
 import 'agent_forward_service.dart';
 
 enum SshAuthMethod { password, key, agent }
@@ -94,6 +96,80 @@ class SshService implements SshTransport {
   StreamSubscription<Uint8List>? _stderrSubscription;
   bool _disposed = false;
 
+  /// Opt-in wire tracing for diagnosing terminal-compat issues: set
+  /// PICSHELL_SSH_TRACE=1 when launching the app and every output chunk
+  /// (pretty-printed) is appended to <Documents>/picshell_ssh_trace.log.
+  static final bool _traceEnabled =
+      Platform.environment['PICSHELL_SSH_TRACE'] == '1';
+  static IOSink? _traceSink;
+
+  void _trace(String direction, Uint8List data) {
+    if (!_traceEnabled) return;
+    _ensureTraceSink();
+    final sb = StringBuffer();
+    final now = DateTime.now();
+    sb.write('${now.hour}:${now.minute}:${now.second}.${now.millisecond} '
+        '$direction: ');
+    var inEsc = false;
+    for (final b in data) {
+      if (b == 0x1b) {
+        sb.write('<ESC>');
+        inEsc = true;
+      } else if (inEsc) {
+        sb.write(String.fromCharCode(b));
+        if ((b >= 0x40 && b <= 0x7e) || b == 0x07) {
+          sb.write(' ');
+          inEsc = false;
+        }
+      } else if (b == 0x0d) {
+        sb.write('<CR>');
+      } else if (b == 0x0a) {
+        sb.write('<LF>');
+      } else {
+        sb.write(String.fromCharCode(b));
+      }
+    }
+    sb.writeln();
+    _traceSink!.write(sb.toString());
+  }
+
+  /// Logs the emulator's cursor/viewport state after a chunk is applied.
+  static void traceCursorState(Terminal terminal) {
+    if (!_traceEnabled) return;
+    _ensureTraceSink();
+    final cur = terminal.buffer;
+    final now = DateTime.now();
+    _traceSink!.writeln(
+        '${now.hour}:${now.minute}:${now.second}.${now.millisecond} '
+        '[cursor] x=${cur.cursorX} y=${cur.cursorY} '
+        'view=${terminal.viewWidth}x${terminal.viewHeight} '
+        'hash=${identityHashCode(terminal)}');
+  }
+
+  static void traceEvent(String message) {
+    if (!_traceEnabled) return;
+    _ensureTraceSink();
+    _traceSink!.writeln(
+        '${DateTime.now().hour}:${DateTime.now().minute}:'
+        '${DateTime.now().second}.${DateTime.now().millisecond} '
+        '[event] $message');
+  }
+
+  static void _ensureTraceSink() {
+    if (_traceSink == null) {
+      // Append-only: never delete here — this runs inside layout paths and a
+      // failed delete would abort the resize. Clear the file externally.
+      _traceSink = File('${_traceDir()}/picshell_ssh_trace.log')
+          .openWrite(mode: FileMode.append);
+    }
+  }
+
+  static String _traceDir() {
+    final home =
+        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+    return home == null ? '.' : '$home/Documents';
+  }
+
   /// Splits a byte stream on UTF-8 sequence boundaries. Decoding each TCP
   /// chunk in isolation corrupts any multibyte character (CJK, emoji) that
   /// straddles two reads into U+FFFD replacement characters.
@@ -172,7 +248,10 @@ class SshService implements SshTransport {
       }
 
       _stdoutSubscription = _session!.stdout.listen(
-        (Uint8List data) => _safeAddOutput(_utf8.process(data)),
+        (Uint8List data) {
+          _trace('OUT', data);
+          _safeAddOutput(_utf8.process(data));
+        },
         onError: (_) {
           _safeAddConnection(false);
         },
@@ -206,6 +285,7 @@ class SshService implements SshTransport {
 
   @override
   void writeToTerminal(String data) {
+    _trace('IN ', utf8.encode(data));
     _session?.write(utf8.encode(data));
   }
 
