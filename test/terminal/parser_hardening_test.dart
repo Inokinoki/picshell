@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm/xterm.dart';
@@ -39,8 +38,7 @@ void main() {
       final terminal = Terminal(maxLines: 100);
       var decoded = 0;
       terminal.onImageDecoded =
-          (Uint8List bytes, String name, int? w, int? h,
-              {inline = true, preserveAspectRatio = true}) {
+          (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
             decoded++;
           };
 
@@ -61,8 +59,7 @@ void main() {
       final terminal = Terminal(maxLines: 100);
       var decoded = 0;
       terminal.onImageDecoded =
-          (Uint8List bytes, String name, int? w, int? h,
-              {inline = true, preserveAspectRatio = true}) {
+          (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
             decoded++;
           };
 
@@ -78,8 +75,7 @@ void main() {
       final terminal = Terminal(maxLines: 100);
       var decoded = 0;
       terminal.onImageDecoded =
-          (Uint8List bytes, String name, int? w, int? h,
-              {inline = true, preserveAspectRatio = true}) {
+          (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
             decoded++;
           };
 
@@ -100,8 +96,7 @@ void main() {
       final terminal = Terminal(maxLines: 100);
       var decoded = 0;
       terminal.onImageDecoded =
-          (Uint8List bytes, String name, int? w, int? h,
-              {inline = true, preserveAspectRatio = true}) {
+          (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
             decoded++;
           };
 

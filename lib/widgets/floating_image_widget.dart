@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:xterm/xterm.dart' show Iterm2Dimension, Iterm2Unit;
 import '../models/floating_image.dart';
 import '../providers/floating_image_provider.dart';
 
@@ -67,19 +68,22 @@ class ModifierTracker {
 /// pixel dimensions, then fitting to 80% of [viewport]. Pure function for
 /// testability.
 ///
-/// Dimension encoding (mirrors the xterm parser): a positive value is treated
-/// as pixels; a **negative** value `-N` means "N percent of the viewport"
-/// (e.g. `-50` → half the viewport). `null` means "no request, use decoded".
+/// Dimension semantics (mirrors the iTerm2 spec, parsed by the xterm fork):
+/// [Iterm2Unit.cells] counts terminal cells ([cellSize] gives the pixel size
+/// of one cell — width for the width axis, height for the height axis),
+/// [Iterm2Unit.pixels] is raw pixels, [Iterm2Unit.percent] is a percentage of
+/// the viewport. `null` means "no request, use decoded".
 Size computeBaseDisplaySize({
   required int decodedWidth,
   required int decodedHeight,
-  int? requestedWidth,
-  int? requestedHeight,
+  Iterm2Dimension? requestedWidth,
+  Iterm2Dimension? requestedHeight,
   required Size viewport,
+  Size cellSize = _defaultCellSize,
 }) {
-  // Normalise percent requests (negative-encoded) to pixels first.
-  final w = _resolveDimension(requestedWidth, viewport.width);
-  final h = _resolveDimension(requestedHeight, viewport.height);
+  final w = _resolveDimension(requestedWidth, viewport.width, cellSize.width);
+  final h =
+      _resolveDimension(requestedHeight, viewport.height, cellSize.height);
 
   Size size;
   if (w != null && h != null) {
@@ -105,12 +109,25 @@ Size computeBaseDisplaySize({
   return size;
 }
 
+/// Approximate pixel size of one terminal cell. The floating-image layer has
+/// no handle on the TerminalView's font metrics, so cells resolve with this
+/// typical default (12px monospace ≈ 9×18) instead of being misread as raw
+/// pixels.
+const _defaultCellSize = Size(9, 18);
+
 /// Resolves an iTerm2 dimension request to pixels. `null` → `null` (no
-/// request). Positive `N` → `N` px. Negative `-N` → `N%` of [viewportExtent].
-double? _resolveDimension(int? dim, double viewportExtent) {
+/// request).
+double? _resolveDimension(
+  Iterm2Dimension? dim,
+  double viewportExtent,
+  double cellExtent,
+) {
   if (dim == null) return null;
-  if (dim < 0) return viewportExtent * (-dim) / 100.0;
-  return dim.toDouble();
+  return switch (dim.unit) {
+    Iterm2Unit.percent => viewportExtent * dim.value / 100.0,
+    Iterm2Unit.pixels => dim.value.toDouble(),
+    Iterm2Unit.cells => dim.value * cellExtent,
+  };
 }
 
 class FloatingImageWidget extends ConsumerStatefulWidget {

@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:xterm/xterm.dart' show Iterm2Unit;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -194,10 +195,13 @@ void main() {
       expect(imageAppeared, isTrue,
           reason: 'OSC 1337 output should produce a floating image');
 
-      // Confirm the protocol request params were honoured.
+      // Confirm the protocol request params were honoured (bare `width=80`
+      // means 80 terminal cells per the iTerm2 spec).
       final img = container.read(floatingImagesProvider).first;
-      expect(img.requestedWidth, 80);
-      expect(img.requestedHeight, 40);
+      expect(img.requestedWidth?.value, 80);
+      expect(img.requestedWidth?.unit, Iterm2Unit.cells);
+      expect(img.requestedHeight?.value, 40);
+      expect(img.requestedHeight?.unit, Iterm2Unit.cells);
       expect(img.name, 't.png');
 
       container.dispose();

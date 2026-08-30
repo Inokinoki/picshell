@@ -8,6 +8,7 @@ import 'package:picshell/models/floating_image.dart';
 import 'package:picshell/providers/floating_image_provider.dart';
 import 'package:picshell/widgets/floating_image_overlay.dart';
 import 'package:picshell/widgets/floating_image_widget.dart';
+import 'package:xterm/xterm.dart' show Iterm2Dimension, Iterm2Unit;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -701,8 +702,8 @@ void main() {
       final s = computeBaseDisplaySize(
         decodedWidth: 1,
         decodedHeight: 1,
-        requestedWidth: 200,
-        requestedHeight: 150,
+        requestedWidth: const Iterm2Dimension(200, Iterm2Unit.pixels),
+        requestedHeight: const Iterm2Dimension(150, Iterm2Unit.pixels),
         viewport: const Size(800, 600),
       );
       expect(s.width, 200);
@@ -714,11 +715,35 @@ void main() {
       final s = computeBaseDisplaySize(
         decodedWidth: 200,
         decodedHeight: 100,
-        requestedWidth: 100,
+        requestedWidth: const Iterm2Dimension(100, Iterm2Unit.pixels),
         viewport: const Size(800, 600),
       );
       expect(s.width, 100);
       expect(s.height, 50);
+    });
+
+    test('cell-unit requests resolve against the terminal cell size', () {
+      // iTerm2 semantics: a bare `width=100` means 100 CELLS.
+      // 100 cells × 9px = 900; the viewport is large enough that the 80%
+      // fit-to-viewport clamp does not kick in.
+      final s = computeBaseDisplaySize(
+        decodedWidth: 1,
+        decodedHeight: 1,
+        requestedWidth: const Iterm2Dimension(100, Iterm2Unit.cells),
+        viewport: const Size(1600, 1200),
+        cellSize: const Size(9, 18),
+      );
+      expect(s.width, 900);
+    });
+
+    test('percent requests resolve against the viewport', () {
+      final s = computeBaseDisplaySize(
+        decodedWidth: 1,
+        decodedHeight: 1,
+        requestedWidth: const Iterm2Dimension(50, Iterm2Unit.percent),
+        viewport: const Size(800, 600),
+      );
+      expect(s.width, 400);
     });
 
     test('falls back to decoded pixel size when no request given', () {

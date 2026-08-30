@@ -114,15 +114,17 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   var _precedingCodepoint = 0;
 
   /// Callback when an iTerm2 image is decoded.
-  /// Receives raw image bytes, filename, and optional width/height from
-  /// protocol. [inline] is true when the image should display inline (iTerm2
-  /// default is download). [preserveAspectRatio] is true when the image's
-  /// aspect ratio should be kept during sizing.
+  /// Receives raw image bytes, filename, and optional width/height requests
+  /// from the protocol (with their units — a bare `N` means N terminal
+  /// cells, `Npx` pixels, `N%` percent of the viewport). [inline] is true
+  /// when the image should display inline (iTerm2 default is download).
+  /// [preserveAspectRatio] is true when the image's aspect ratio should be
+  /// kept during sizing.
   void Function(
     Uint8List bytes,
     String name,
-    int? width,
-    int? height, {
+    Iterm2Dimension? width,
+    Iterm2Dimension? height, {
     bool inline,
     bool preserveAspectRatio,
   })? onImageDecoded;
@@ -1028,19 +1030,18 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     );
   }
 
-  /// Parses an iTerm2 dimension param into a numeric pixel value when possible.
-  /// The iTerm2 protocol allows `N` (cells), `Npx` (pixels), `N%` (percent),
-  /// or `auto`. We expose the numeric portion and let the widget decide units
-  /// based on whether the original string carried a suffix; here we return the
-  /// integer and lose the unit (callers treat large values as pixels).
-  /// Percent values are kept negative-encoded (`-N`) so the widget can detect
-  /// them: a width of `50%` becomes `-50`.
-  static int? _parseDimension(String? s) {
+  /// Parses an iTerm2 dimension param with its unit, per spec: a bare `N`
+  /// means N terminal cells, `Npx` means pixels, `N%` means percent of the
+  /// viewport, `auto` (or anything unparseable) means no request.
+  static Iterm2Dimension? _parseDimension(String? s) {
     if (s == null || s == 'auto') return null;
     final num = int.tryParse(s.replaceAll(RegExp(r'[^0-9]'), ''));
     if (num == null) return null;
-    if (s.endsWith('%')) return -num; // negative signals "percent"
-    return num;
+    if (s.endsWith('%')) return Iterm2Dimension(num, Iterm2Unit.percent);
+    if (s.toLowerCase().endsWith('px')) {
+      return Iterm2Dimension(num, Iterm2Unit.pixels);
+    }
+    return Iterm2Dimension(num, Iterm2Unit.cells);
   }
 
   static String? tryDecodeBase64Str(String s) {
@@ -1067,4 +1068,38 @@ class _MultipartState {
   final Map<String, String> params;
   final StringBuffer buffer;
   _MultipartState({required this.params, required this.buffer});
+}
+
+/// Unit of an iTerm2 image dimension request.
+enum Iterm2Unit { cells, pixels, percent }
+
+/// A parsed iTerm2 `width=`/`height=` request. Per the iTerm2 image protocol,
+/// a bare `N` counts terminal cells, `Npx` counts pixels, and `N%` is a
+/// percentage of the terminal viewport.
+class Iterm2Dimension {
+  final int value;
+  final Iterm2Unit unit;
+
+  const Iterm2Dimension(this.value, this.unit);
+
+  @override
+  bool operator ==(Object other) =>
+      other is Iterm2Dimension &&
+      other.value == value &&
+      other.unit == unit;
+
+  @override
+  int get hashCode => Object.hash(value, unit);
+
+  @override
+  String toString() {
+    switch (unit) {
+      case Iterm2Unit.percent:
+        return '$value%';
+      case Iterm2Unit.pixels:
+        return '${value}px';
+      case Iterm2Unit.cells:
+        return '$value cells';
+    }
+  }
 }

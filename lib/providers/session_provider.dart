@@ -101,8 +101,8 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     terminal.onImageDecoded = (
       Uint8List bytes,
       String imgName,
-      int? w,
-      int? h, {
+      Iterm2Dimension? w,
+      Iterm2Dimension? h, {
       inline = true,
       preserveAspectRatio = true,
     }) {
