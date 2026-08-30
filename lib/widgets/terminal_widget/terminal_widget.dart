@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
@@ -87,6 +90,13 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
             // focus on launch and session switches, otherwise keystrokes go
             // nowhere until the user happens to click inside it.
             autofocus: true,
+            // Windows' TextInputPlugin silently drops printable-character
+            // insertions for the hidden text field xterm attaches, leaving
+            // special keys (Enter) working while plain typing is dead. On
+            // desktop, take characters straight from hardware key events;
+            // mobile keeps the text-input path for the soft keyboard.
+            hardwareKeyboardOnly:
+                !kIsWeb && (Platform.isWindows || Platform.isLinux),
           ),
         ),
         if (showKeyboard)
