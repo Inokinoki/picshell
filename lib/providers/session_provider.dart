@@ -94,6 +94,22 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     // carries an onVerifyHostKey callback consulting the known_hosts store;
     // the original config from the UI does not have one. This derived config
     // is what gets stored on the SessionState, so reconnects are verified too.
+    //
+    // The callback must NOT throw: newer dartssh2 swallows callback
+    // exceptions and fails the connect with a generic
+    // "connection closed before authentication" SSHAuthAbortError, which
+    // would hide the TOFU prompt. Instead we record the rejection, return
+    // false, and re-raise the typed exception after connect() fails.
+    HostKeyVerification? hostKeyRejection;
+    String? rejectedKeyType;
+    Uint8List? rejectedFingerprint;
+    void recordRejection(
+        HostKeyVerification result, String type, Uint8List fingerprint) {
+      hostKeyRejection = result;
+      rejectedKeyType = type;
+      rejectedFingerprint = fingerprint;
+    }
+
     // Resolve an optional jump host from the host list and build a nested
     // config for it. _withTofu injects per-hop host-key verification, so the
     // jump host is TOFU-checked independently of the final target. Single hop
@@ -114,7 +130,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
           'which is not supported. Clear its jump setting first.',
         );
       }
-      proxyConfig = _withTofu(_configFromHost(proxyHost));
+      proxyConfig = _withTofu(_configFromHost(proxyHost), recordRejection);
     }
     final verifiedConfig = _withTofu(SshConnectionConfig(
       host: config.host,
@@ -125,7 +141,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       privateKeyPem: config.privateKeyPem,
       passphrase: config.passphrase,
       proxyConfig: proxyConfig,
-    ));
+    ), recordRejection);
 
     final service = SshService();
     final terminal = Terminal(maxLines: 10000);
@@ -189,6 +205,18 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       ));
     } catch (e) {
       closeSession(session.id);
+      // Restore the typed host-key exceptions the UI knows how to present.
+      if (hostKeyRejection != null) {
+        final fingerprintHex = _hex(rejectedFingerprint!);
+        if (hostKeyRejection == HostKeyVerification.mismatch) {
+          throw HostKeyMismatchException(
+            config.host, config.port, rejectedKeyType!, fingerprintHex,
+          );
+        }
+        throw UnknownHostException(
+          config.host, config.port, rejectedKeyType!, fingerprintHex,
+        );
+      }
       rethrow;
     }
   }
@@ -291,7 +319,8 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
   /// Returns [config] with an [SshConnectionConfig.onVerifyHostKey] callback
   /// that consults the known_hosts store (TOFU). Applied recursively to any
   /// nested [SshConnectionConfig.proxyConfig] so every hop is verified.
-  SshConnectionConfig _withTofu(SshConnectionConfig config) {
+  SshConnectionConfig _withTofu(SshConnectionConfig config,
+      [void Function(HostKeyVerification, String, Uint8List)? onRejected]) {
     final knownHosts = _ref.read(knownHostsStoreProvider);
     return SshConnectionConfig(
       host: config.host,
@@ -301,25 +330,19 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       password: config.password,
       privateKeyPem: config.privateKeyPem,
       passphrase: config.passphrase,
-      proxyConfig:
-          config.proxyConfig == null ? null : _withTofu(config.proxyConfig!),
+      proxyConfig: config.proxyConfig == null
+          ? null
+          : _withTofu(config.proxyConfig!, onRejected),
       onVerifyHostKey: (type, fingerprint) async {
-        switch (await knownHosts.verify(
+        final result = await knownHosts.verify(
           config.host, config.port, type, fingerprint,
-        )) {
-          case HostKeyVerification.trusted:
-            return true;
-          case HostKeyVerification.mismatch:
-            throw HostKeyMismatchException(
-              config.host, config.port, type,
-              _hex(fingerprint),
-            );
-          case HostKeyVerification.unknown:
-            throw UnknownHostException(
-              config.host, config.port, type,
-              _hex(fingerprint),
-            );
-        }
+        );
+        if (result == HostKeyVerification.trusted) return true;
+        // Never throw from here: newer dartssh2 swallows callback
+        // exceptions, hiding the TOFU prompt behind a generic auth abort.
+        // Record the rejection and let openSession re-raise it typed.
+        onRejected?.call(result, type, fingerprint);
+        return false;
       },
     );
   }

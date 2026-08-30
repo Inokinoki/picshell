@@ -185,7 +185,7 @@ void main() {
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp('picshell_sess_test_');
       Hive.init(tempDir.path);
-      if (!Hive.isAdapterRegistered(3)) {
+      if (!Hive.isAdapterRegistered(6)) {
         Hive.registerAdapter(KnownHostAdapter());
       }
       final knownHosts = KnownHostsStore();
