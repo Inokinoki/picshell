@@ -17,7 +17,9 @@ class FailureBudget {
 }
 
 /// Scriptable transport: records calls so tests can assert the session
-/// lifecycle actually reconnected, rebound I/O, and backed off.
+/// lifecycle actually reconnected, rebound I/O, and backed off. connect()
+/// invokes the config's host-key verifier the way dartssh2 does and fails
+/// when it returns false.
 class FakeSshTransport implements SshTransport {
   final FailureBudget? budget;
   final _output = StreamController<String>.broadcast();
@@ -32,6 +34,18 @@ class FakeSshTransport implements SshTransport {
   @override
   Future<void> connect(SshConnectionConfig config) async {
     connectCalls++;
+    final verify = config.onVerifyHostKey;
+    if (verify != null) {
+      final fingerprint =
+          Uint8List.fromList(List.generate(32, (i) => i + 1));
+      final accepted = await verify('ssh-ed25519', fingerprint);
+      if (!accepted) {
+        // dartssh2 closes the transport here and surfaces a generic
+        // SSHAuthAbortError; the typed reason is our business.
+        _connection.add(false);
+        throw Exception('host key rejected by verifier');
+      }
+    }
     final b = budget;
     if (b != null && b.remaining > 0) {
       b.remaining--;
@@ -76,6 +90,34 @@ class _TrustingKnownHosts implements KnownHostsStore {
     Uint8List fingerprintBytes,
   ) async =>
       HostKeyVerification.trusted;
+
+  @override
+  Future<void> trust(
+    String host,
+    int port,
+    String keyType,
+    Uint8List fingerprintBytes,
+  ) async {}
+
+  @override
+  Future<void> forget(String host, int port) async {}
+}
+
+class _FixedKnownHosts implements KnownHostsStore {
+  final HostKeyVerification result;
+  _FixedKnownHosts(this.result);
+
+  @override
+  Future<void> init() async {}
+
+  @override
+  Future<HostKeyVerification> verify(
+    String host,
+    int port,
+    String keyType,
+    Uint8List fingerprintBytes,
+  ) async =>
+      result;
 
   @override
   Future<void> trust(
@@ -216,6 +258,59 @@ void main() {
       await Future<void>.delayed(const Duration(seconds: 2));
       expect(container.read(sessionListProvider), isEmpty);
       expect(created, hasLength(1));
+    });
+
+    test('unknown host key surfaces UnknownHostException, not a generic error',
+        () async {
+      // Regression: dartssh2 swallows exceptions thrown inside
+      // onVerifyHostKey and fails the connect with a generic
+      // "connection closed before authentication". The session must
+      // translate the recorded rejection back into the typed exception the
+      // TOFU dialog flow catches.
+      final container = ProviderContainer(overrides: [
+        knownHostsStoreProvider
+            .overrideWithValue(_FixedKnownHosts(HostKeyVerification.unknown)),
+        sessionListProvider.overrideWith((ref) => SessionListNotifier(
+              ref,
+              transportFactory: () {
+                final fake = FakeSshTransport();
+                created.add(fake);
+                return fake;
+              },
+            )),
+      ]);
+      addTearDown(container.dispose);
+
+      await expectLater(
+        container
+            .read(sessionListProvider.notifier)
+            .openSession(testHost, testConfig),
+        throwsA(isA<UnknownHostException>()),
+      );
+      expect(container.read(sessionListProvider), isEmpty);
+    });
+
+    test('mismatched host key surfaces HostKeyMismatchException', () async {
+      final container = ProviderContainer(overrides: [
+        knownHostsStoreProvider
+            .overrideWithValue(_FixedKnownHosts(HostKeyVerification.mismatch)),
+        sessionListProvider.overrideWith((ref) => SessionListNotifier(
+              ref,
+              transportFactory: () {
+                final fake = FakeSshTransport();
+                created.add(fake);
+                return fake;
+              },
+            )),
+      ]);
+      addTearDown(container.dispose);
+
+      await expectLater(
+        container
+            .read(sessionListProvider.notifier)
+            .openSession(testHost, testConfig),
+        throwsA(isA<HostKeyMismatchException>()),
+      );
     });
   });
 }

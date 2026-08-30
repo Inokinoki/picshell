@@ -62,7 +62,16 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     // carries an onVerifyHostKey callback consulting the known_hosts store;
     // the original config from the UI does not have one. This derived config
     // is what gets stored on the SessionState, so reconnects are verified too.
+    //
+    // The callback must NOT throw: newer dartssh2 swallows callback
+    // exceptions and fails the connect with a generic
+    // "connection closed before authentication" SSHAuthAbortError, which
+    // would hide the TOFU prompt. Instead we record the rejection, return
+    // false, and re-raise the typed exception after connect() fails.
     final knownHosts = _ref.read(knownHostsStoreProvider);
+    HostKeyVerification? hostKeyRejection;
+    String? rejectedKeyType;
+    Uint8List? rejectedFingerprint;
     final verifiedConfig = SshConnectionConfig(
       host: config.host,
       port: config.port,
@@ -72,22 +81,14 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       privateKeyPem: config.privateKeyPem,
       passphrase: config.passphrase,
       onVerifyHostKey: (type, fingerprint) async {
-        switch (await knownHosts.verify(
+        final result = await knownHosts.verify(
           config.host, config.port, type, fingerprint,
-        )) {
-          case HostKeyVerification.trusted:
-            return true;
-          case HostKeyVerification.mismatch:
-            throw HostKeyMismatchException(
-              config.host, config.port, type,
-              _hex(fingerprint),
-            );
-          case HostKeyVerification.unknown:
-            throw UnknownHostException(
-              config.host, config.port, type,
-              _hex(fingerprint),
-            );
-        }
+        );
+        if (result == HostKeyVerification.trusted) return true;
+        hostKeyRejection = result;
+        rejectedKeyType = type;
+        rejectedFingerprint = fingerprint;
+        return false;
       },
     );
 
@@ -166,6 +167,18 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       ];
     } catch (e) {
       closeSession(session.id);
+      // Restore the typed host-key exceptions the UI knows how to present.
+      if (hostKeyRejection != null) {
+        final fingerprintHex = _hex(rejectedFingerprint!);
+        if (hostKeyRejection == HostKeyVerification.mismatch) {
+          throw HostKeyMismatchException(
+            config.host, config.port, rejectedKeyType!, fingerprintHex,
+          );
+        }
+        throw UnknownHostException(
+          config.host, config.port, rejectedKeyType!, fingerprintHex,
+        );
+      }
       rethrow;
     }
   }
