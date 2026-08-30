@@ -8,7 +8,7 @@ part of 'known_host.dart';
 
 class KnownHostAdapter extends TypeAdapter<KnownHost> {
   @override
-  final int typeId = 3;
+  final int typeId = 4;
 
   @override
   KnownHost read(BinaryReader reader) {
