@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,9 +16,7 @@ import 'package:picshell/providers/session_provider.dart';
 import 'package:picshell/providers/settings_provider.dart';
 import 'package:picshell/services/host_store.dart';
 import 'package:picshell/services/known_hosts_store.dart';
-import 'package:picshell/services/secret_cipher.dart';
 import 'package:picshell/services/ssh_service.dart';
-import 'package:picshell/widgets/terminal_widget/terminal_widget.dart';
 
 /// End-to-end regression for the Win32-OpenSSH (PowerShell) flow:
 /// connect with the saved host credentials, switch shells, run `clear`, and
@@ -103,7 +100,8 @@ void main() {
     ));
     await tester.pumpAndSettle(const Duration(seconds: 2));
 
-    final password = container.read(hostStoreProvider)!.getHost(host.id)!.password;
+    final password =
+        container.read(hostStoreProvider)!.getHost(host.id)?.password;
     final config = SshConnectionConfig(
       host: host.hostname,
       port: host.port,
