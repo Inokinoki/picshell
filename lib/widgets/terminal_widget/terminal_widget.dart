@@ -83,6 +83,10 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
             widget.terminal,
             controller: _terminalController,
             focusNode: _focusNode,
+            // The terminal is the screen's primary content — take keyboard
+            // focus on launch and session switches, otherwise keystrokes go
+            // nowhere until the user happens to click inside it.
+            autofocus: true,
           ),
         ),
         if (showKeyboard)
