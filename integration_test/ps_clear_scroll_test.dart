@@ -101,7 +101,7 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 2));
 
     final password =
-        container.read(hostStoreProvider)!.getHost(host.id)?.password;
+        container.read(hostStoreProvider).getHost(host.id)?.password;
     final config = SshConnectionConfig(
       host: host.hostname,
       port: host.port,
