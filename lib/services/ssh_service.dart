@@ -98,7 +98,7 @@ class SshService implements SshTransport {
 
   /// Opt-in wire tracing for diagnosing terminal-compat issues: set
   /// PICSHELL_SSH_TRACE=1 when launching the app and every output chunk
-  /// (pretty-printed) is appended to <Documents>/picshell_ssh_trace.log.
+  /// (pretty-printed) is appended to `Documents/picshell_ssh_trace.log`.
   static final bool _traceEnabled =
       Platform.environment['PICSHELL_SSH_TRACE'] == '1';
   static IOSink? _traceSink;
@@ -156,12 +156,10 @@ class SshService implements SshTransport {
   }
 
   static void _ensureTraceSink() {
-    if (_traceSink == null) {
-      // Append-only: never delete here — this runs inside layout paths and a
-      // failed delete would abort the resize. Clear the file externally.
-      _traceSink = File('${_traceDir()}/picshell_ssh_trace.log')
-          .openWrite(mode: FileMode.append);
-    }
+    // Append-only: never delete here — this runs inside layout paths and a
+    // failed delete would abort the resize. Clear the file externally.
+    _traceSink ??= File('${_traceDir()}/picshell_ssh_trace.log')
+        .openWrite(mode: FileMode.append);
   }
 
   static String _traceDir() {
