@@ -39,6 +39,9 @@ final sessionListProvider =
       return SessionListNotifier(ref);
     });
 
+final selectedSessionSizeProvider =
+    StateProvider<({int width, int height})?>((ref) => null);
+
 class SessionListNotifier extends StateNotifier<List<SessionState>> {
   final Ref _ref;
 
@@ -96,6 +99,15 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     final terminal = Terminal(maxLines: 10000);
     final sessionId = _uuid.v4();
     final createdAt = DateTime.now();
+
+    // Seed the new terminal with the size of the last live terminal so the
+    // very first pty resize (applied when the shell channel opens) matches
+    // the window — otherwise the remote stays at the default geometry until
+    // the user resizes the window.
+    final lastSize = _ref.read(selectedSessionSizeProvider);
+    if (lastSize != null) {
+      terminal.resize(lastSize.width, lastSize.height);
+    }
 
     _bindTerminalIo(sessionId, terminal);
 
@@ -197,6 +209,8 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
 
     terminal.onOutput = (data) => currentService()?.writeToTerminal(data);
     terminal.onResize = (width, height, pixelWidth, pixelHeight) {
+      _ref.read(selectedSessionSizeProvider.notifier).state =
+          (width: width, height: height);
       currentService()?.resizeTerminal(width, height);
     };
   }

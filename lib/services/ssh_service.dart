@@ -77,6 +77,15 @@ abstract interface class SshTransport {
 class SshService implements SshTransport {
   SSHClient? _client;
   SSHSession? _session;
+
+  /// Resize requested while no session existed yet (the view lays out and
+  /// resizes the terminal before/while connect() is still running). Applied
+  /// as soon as the shell channel opens so the remote pty geometry matches
+  /// the local terminal from the start; otherwise the remote stays at the
+  /// initial size and screen-clearing sequences only wipe part of the view.
+  int? _pendingWidth;
+  int? _pendingHeight;
+
   final StreamController<String> _outputController =
       StreamController.broadcast();
   final StreamController<bool> _connectionController =
@@ -154,8 +163,13 @@ class SshService implements SshTransport {
 
       _client = client;
       _session = await _client!.shell(
-        pty: const SSHPtyConfig(width: 80, height: 24, type: 'xterm-256color'),
+        pty: const SSHPtyConfig(width: 120, height: 30, type: 'xterm-256color'),
       );
+      if (_pendingWidth != null && _pendingHeight != null) {
+        _session!.resizeTerminal(_pendingWidth!, _pendingHeight!);
+        _pendingWidth = null;
+        _pendingHeight = null;
+      }
 
       _stdoutSubscription = _session!.stdout.listen(
         (Uint8List data) => _safeAddOutput(_utf8.process(data)),
@@ -197,7 +211,12 @@ class SshService implements SshTransport {
 
   @override
   void resizeTerminal(int width, int height) {
-    _session?.resizeTerminal(width, height);
+    if (_session == null) {
+      _pendingWidth = width;
+      _pendingHeight = height;
+      return;
+    }
+    _session!.resizeTerminal(width, height);
   }
 
   void disconnect() {
