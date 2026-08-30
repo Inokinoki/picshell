@@ -16,6 +16,10 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # Vendored upstream xterm fork: its bundled tests/examples never compiled
+    # under current SDKs (upstream rot). The fork's behaviour is exercised by
+    # the root project's test/terminal suite instead.
+    - packages/**
 include: package:flutter_lints/flutter.yaml
 
 linter:
