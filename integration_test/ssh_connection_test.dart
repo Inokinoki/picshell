@@ -257,10 +257,11 @@ void main() {
 
       // Confirm the protocol request params were honoured.
       final img = container.read(floatingImagesProvider).first;
-      expect(img.requestedWidth, 80);
-      expect(img.requestedHeight, 40);
+      expect(img.requestedWidth?.value, 80);
+      expect(img.requestedHeight?.value, 40);
       expect(img.name, 't.png');
 
+      await tester.pumpAndSettle();
       container.dispose();
     }, timeout: const Timeout(Duration(minutes: 2)));
 
