@@ -3,7 +3,9 @@ import 'package:hive/hive.dart';
 part 'known_host.g.dart';
 
 /// A pinned SSH host key for TOFU (trust-on-first-use) verification.
-@HiveType(typeId: 3)
+/// typeId 6: 0-5 are taken by Host/AuthType/SshKey/Session/ForwardType/
+/// ForwardRule; the old value 3 collided with Session and crashed main().
+@HiveType(typeId: 6)
 class KnownHost extends HiveObject {
   @HiveField(0)
   final String host;
