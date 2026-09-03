@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -204,7 +203,7 @@ class HomeScreen extends ConsumerWidget {
         host: e.host,
         port: e.port,
         keyType: e.keyType,
-        fingerprintHex: e.fingerprint,
+        fingerprint: e.fingerprint,
       );
       if (trust != true || !context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -216,11 +215,10 @@ class HomeScreen extends ConsumerWidget {
       // The retry goes through the same verified path; this time verify()
       // returns trusted.
       try {
-        // We don't have the raw bytes here (only the hex), so reconstruct.
-        final raw = _hexToBytes(e.fingerprint);
+        // The exception already carries the canonical fingerprint string.
         await ref
             .read(knownHostsStoreProvider)
-            .trust(e.host, e.port, e.keyType, raw);
+            .trustFingerprint(e.host, e.port, e.keyType, e.fingerprint);
       } catch (_) {
         // Best-effort; the retry below will re-prompt if trust didn't persist.
       }
@@ -381,17 +379,6 @@ class _SessionView extends StatelessWidget {
       ],
     );
   }
-}
-
-/// Parses a hex string back into bytes (inverse of session_provider._hex),
-/// used to re-feed a fingerprint into KnownHostsStore.trust after the user
-/// accepts an unknown host.
-Uint8List _hexToBytes(String hex) {
-  final out = <int>[];
-  for (var i = 0; i + 1 < hex.length; i += 2) {
-    out.add(int.parse(hex.substring(i, i + 2), radix: 16));
-  }
-  return Uint8List.fromList(out);
 }
 
 class _ForwardsSheet extends ConsumerWidget {

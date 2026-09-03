@@ -56,6 +56,9 @@ class AlwaysTrustKnownHostsStore implements KnownHostsStore {
   Future<void> init() async {}
   @override
   Future<void> trust(String host, int port, String keyType, Uint8List fingerprintBytes) async {}
+
+  @override
+  Future<void> trustFingerprint(String host, int port, String keyType, String fingerprint) async {}
 }
 
 SwitchableBackend? _backend;

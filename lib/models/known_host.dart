@@ -16,8 +16,9 @@ class KnownHost extends HiveObject {
   @HiveField(2)
   final String keyType;
 
-  /// Hex-encoded fingerprint of the host public key (as given by dartssh2's
-  /// `onVerifyHostKey` callback, currently MD5 of the raw key bytes).
+  /// Canonical fingerprint string, e.g. `SHA256:<base64>` (what dartssh2
+  /// >= 2.22 presents) or `MD5:aa:bb:...` — see
+  /// `canonicalHostKeyFingerprint`.
   @HiveField(3)
   final String fingerprint;
 

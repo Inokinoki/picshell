@@ -207,14 +207,14 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       closeSession(session.id);
       // Restore the typed host-key exceptions the UI knows how to present.
       if (hostKeyRejection != null) {
-        final fingerprintHex = _hex(rejectedFingerprint!);
+        final fingerprint = canonicalHostKeyFingerprint(rejectedFingerprint!);
         if (hostKeyRejection == HostKeyVerification.mismatch) {
           throw HostKeyMismatchException(
-            config.host, config.port, rejectedKeyType!, fingerprintHex,
+            config.host, config.port, rejectedKeyType!, fingerprint,
           );
         }
         throw UnknownHostException(
-          config.host, config.port, rejectedKeyType!, fingerprintHex,
+          config.host, config.port, rejectedKeyType!, fingerprint,
         );
       }
       rethrow;
@@ -400,13 +400,4 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     }
     return result;
   }
-}
-
-/// Hex-encodes a byte list for display in host-key exception messages.
-String _hex(Uint8List bytes) {
-  final sb = StringBuffer();
-  for (final b in bytes) {
-    sb.write(b.toRadixString(16).padLeft(2, '0'));
-  }
-  return sb.toString();
 }

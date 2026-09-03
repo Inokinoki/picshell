@@ -107,6 +107,14 @@ class _AlwaysTrustKnownHostsStore implements KnownHostsStore {
     String keyType,
     Uint8List fingerprintBytes,
   ) async {}
+
+  @override
+  Future<void> trustFingerprint(
+    String host,
+    int port,
+    String keyType,
+    String fingerprint,
+  ) async {}
 }
 
 /// Drives an SSH session open against the test sshd, retrying on handshake
