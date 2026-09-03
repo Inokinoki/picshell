@@ -159,7 +159,11 @@ class SshService {
 
   Future<void> connect(SshConnectionConfig config) async {
     try {
-      _safeAddConnection(false);
+      // No initial `false` emission here: openSession subscribes to
+      // connectionState BEFORE awaiting connect(), so a synthetic
+      // "disconnected" would instantly schedule a bogus reconnect that
+      // disposes the healthy connection 2s later (input then dies with the
+      // old transport). Emit only real transitions.
 
       // ProxyJump: authenticate to the jump host first, then open a
       // direct-tcpip channel through it which becomes the target's socket.
