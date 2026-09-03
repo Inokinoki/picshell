@@ -10,8 +10,25 @@ import 'package:picshell/models/session.dart';
 import 'package:picshell/services/host_store.dart';
 import 'package:picshell/providers/host_provider.dart';
 import 'package:picshell/providers/settings_provider.dart';
+import 'package:picshell/providers/vault_provider.dart';
+import 'package:picshell/services/vault_service.dart';
 
 bool _hiveReady = false;
+
+/// Inert vault backend: the app shell requires a vault provider, but these
+/// tests never unlock, so the backend is never invoked.
+class _NoopBackend implements VaultBackend {
+  @override
+  Future<bool> get canCheckBiometrics async => false;
+  @override
+  Future<bool> authenticate({String reason = ''}) async => false;
+  @override
+  Future<String?> readKey() async => null;
+  @override
+  Future<void> writeKey(String key) async {}
+  @override
+  Future<void> deleteKey() async {}
+}
 
 Future<ProviderContainer> _initApp() async {
   if (!_hiveReady) {
@@ -26,10 +43,16 @@ Future<ProviderContainer> _initApp() async {
   final hostStore = HostStore();
   await hostStore.init();
 
+  final vault = VaultService(_NoopBackend());
+
   return ProviderContainer(overrides: [
     hostStoreProvider.overrideWithValue(hostStore),
     settingsProvider.overrideWith(
       (ref) => SettingsNotifier(loadFromStorage: false),
+    ),
+    vaultServiceProvider.overrideWithValue(vault),
+    appLockProvider.overrideWith(
+      (ref) => AppLockNotifier(vault, hostStore, initiallyLocked: false),
     ),
   ]);
 }

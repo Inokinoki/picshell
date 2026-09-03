@@ -19,9 +19,26 @@ import 'package:picshell/services/host_store.dart';
 import 'package:picshell/services/known_hosts_store.dart';
 import 'package:picshell/services/sftp_service.dart';
 import 'package:picshell/services/ssh_service.dart';
+import 'package:picshell/providers/vault_provider.dart';
+import 'package:picshell/services/vault_service.dart';
 import 'package:picshell/widgets/floating_image_widget.dart';
 
 bool _hiveReady = false;
+
+/// Inert vault backend: the app shell requires a vault provider, but these
+/// tests never unlock, so the backend is never invoked.
+class _NoopBackend implements VaultBackend {
+  @override
+  Future<bool> get canCheckBiometrics async => false;
+  @override
+  Future<bool> authenticate({String reason = ''}) async => false;
+  @override
+  Future<String?> readKey() async => null;
+  @override
+  Future<void> writeKey(String key) async {}
+  @override
+  Future<void> deleteKey() async {}
+}
 
 /// Connection target for the throwaway docker sshd. Defaults to localhost for
 /// local runs; CI injects 10.0.2.2 (the Android emulator's alias for the host
@@ -44,6 +61,8 @@ Future<ProviderContainer> _initApp() async {
   final hostStore = HostStore();
   await hostStore.init();
 
+  final vault = VaultService(_NoopBackend());
+
   // A KnownHostsStore whose verify() always trusts the presented key, so the
   // first connection to the throwaway docker sshd isn't rejected by TOFU.
   final trustingStore = _AlwaysTrustKnownHostsStore();
@@ -58,6 +77,10 @@ Future<ProviderContainer> _initApp() async {
       (ref) => SettingsNotifier(loadFromStorage: false),
     ),
     knownHostsStoreProvider.overrideWithValue(trustingStore),
+    vaultServiceProvider.overrideWithValue(vault),
+    appLockProvider.overrideWith(
+      (ref) => AppLockNotifier(vault, hostStore, initiallyLocked: false),
+    ),
   ]);
 }
 
