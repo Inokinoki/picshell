@@ -378,7 +378,8 @@ void main() {
       final connected = await _connectWithRetry(tester, container, host, config);
       expect(connected, isTrue, reason: 'SFTP smoke needs a connected session');
       final sessions = container.read(sessionListProvider);
-      return SftpService(sessions.first.sshService);
+      // The default factory always builds the real SshService.
+      return SftpService(sessions.first.sshService as SshService);
     }
 
     testWidgets('listdir / returns the marker file', (tester) async {

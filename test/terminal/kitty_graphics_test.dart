@@ -22,16 +22,16 @@ void main() {
       terminal.onImageDecoded = (
         Uint8List bytes,
         String name,
-        int? w,
-        int? h, {
+        Iterm2Dimension? w,
+        Iterm2Dimension? h, {
         inline = true,
         preserveAspectRatio = true,
       }) {
         received.add({
           'bytes': bytes,
           'name': name,
-          'w': w,
-          'h': h,
+          'w': w?.value,
+          'h': h?.value,
         });
       };
     });

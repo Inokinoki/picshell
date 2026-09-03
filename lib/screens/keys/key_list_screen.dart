@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../models/host.dart';
+import '../../providers/host_provider.dart';
 import '../../providers/key_provider.dart';
 import '../../services/key_import_service.dart';
 
@@ -96,13 +98,13 @@ class KeyListScreen extends ConsumerWidget {
     }
   }
 
-  void _confirmDelete(
+  Future<void> _confirmDelete(
     BuildContext context,
     WidgetRef ref,
     String id,
     String name,
-  ) {
-    showDialog<bool>(
+  ) async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Key'),
@@ -119,10 +121,18 @@ class KeyListScreen extends ConsumerWidget {
           ),
         ],
       ),
-    ).then((confirmed) {
-      if (confirmed == true) {
-        ref.read(keyListProvider.notifier).delete(id);
-      }
-    });
+    );
+    if (confirmed != true) return;
+
+    ref.read(keyListProvider.notifier).delete(id);
+
+    // Hosts configured for this key would fail opaquely at connect time;
+    // switch them back to password auth.
+    final hosts = ref.read(hostListProvider);
+    for (final host in hosts.where((h) => h.keyId == id)) {
+      host.keyId = null;
+      host.authType = AuthType.password;
+      ref.read(hostListProvider.notifier).update(host);
+    }
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter/painting.dart';
+import 'package:xterm/xterm.dart' show Iterm2Dimension;
 
 class FloatingImage {
   final String id;
@@ -8,8 +9,12 @@ class FloatingImage {
   Offset position;
   Size size;
   bool minimized;
-  final int? requestedWidth;
-  final int? requestedHeight;
+
+  /// Size requests carried by the iTerm2 sequence (`width=`/`height=`),
+  /// including their unit — a bare `N` counts terminal cells, `Npx` pixels,
+  /// `N%` percent of the viewport.
+  final Iterm2Dimension? requestedWidth;
+  final Iterm2Dimension? requestedHeight;
   double scale;
   final bool inline;
   final bool preserveAspectRatio;

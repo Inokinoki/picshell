@@ -9,7 +9,7 @@ void main() {
       final terminal = Terminal(maxLines: 1000);
 
       final received = <Map<String, dynamic>>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add({
           'bytes': bytes,
           'name': name,
@@ -34,7 +34,7 @@ void main() {
       final terminal = Terminal(maxLines: 1000);
 
       final received = <Uint8List>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add(bytes);
       };
 
@@ -55,7 +55,7 @@ void main() {
       final terminal = Terminal(maxLines: 1000);
 
       final received = <Uint8List>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add(bytes);
       };
 
@@ -78,7 +78,7 @@ void main() {
       final terminal = Terminal(maxLines: 1000);
 
       final received = <String>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add(name);
       };
 
@@ -100,7 +100,7 @@ void main() {
       final terminal = Terminal(maxLines: 1000);
 
       final received = <int>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add(bytes.length);
       };
 
@@ -119,7 +119,7 @@ void main() {
       final terminal = Terminal(maxLines: 1000);
 
       final received = <int>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add(bytes.length);
       };
 
@@ -137,7 +137,7 @@ void main() {
       final terminal = Terminal(maxLines: 1000);
 
       final received = <int>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add(bytes.length);
       };
 
@@ -155,7 +155,7 @@ void main() {
       final terminal = Terminal(maxLines: 1000);
 
       final received = <Map<String, dynamic>>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add({'name': name, 'bytes_len': bytes.length});
       };
 

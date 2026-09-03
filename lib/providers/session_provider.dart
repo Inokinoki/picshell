@@ -25,7 +25,7 @@ class ActiveForwardInfo {
 class SessionState {
   final String id;
   final Host host;
-  final SshService sshService;
+  final SshTransport sshService;
   final Terminal terminal;
   final bool connected;
   final bool reconnecting;
@@ -57,7 +57,7 @@ class SessionState {
   SessionState copyWith({
     bool? connected,
     bool? reconnecting,
-    SshService? sshService,
+    SshTransport? sshService,
     Map<String, ActiveForwardInfo>? runningForwards,
   }) {
     return SessionState(
@@ -81,8 +81,13 @@ final sessionListProvider =
 
 class SessionListNotifier extends StateNotifier<List<SessionState>> {
   final Ref _ref;
+  final SshTransport Function() _transportFactory;
 
-  SessionListNotifier(this._ref) : super([]);
+  SessionListNotifier(
+    this._ref, {
+    @visibleForTesting SshTransport Function()? transportFactory,
+  })  : _transportFactory = transportFactory ?? SshService.new,
+        super([]);
 
   @visibleForTesting
   void debugAddSession(SessionState session) {
@@ -143,23 +148,31 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       proxyConfig: proxyConfig,
     ), recordRejection);
 
-    final service = SshService();
+    final service = _transportFactory();
     final terminal = Terminal(maxLines: 10000);
     final sessionId = _uuid.v4();
     final createdAt = DateTime.now();
 
-    terminal.onOutput = (data) {
-      service.writeToTerminal(data);
-    };
+    // Resolve the session's current transport on every call: an
+    // auto-reconnect replaces SessionState.sshService, and a closure over
+    // the original instance would silently drop user input after the swap.
+    SshTransport? currentService() {
+      for (final s in state) {
+        if (s.id == sessionId) return s.sshService;
+      }
+      return null;
+    }
+
+    terminal.onOutput = (data) => currentService()?.writeToTerminal(data);
     terminal.onResize = (width, height, pixelWidth, pixelHeight) {
-      service.resizeTerminal(width, height);
+      currentService()?.resizeTerminal(width, height);
     };
 
     terminal.onImageDecoded = (
       Uint8List bytes,
       String imgName,
-      int? w,
-      int? h, {
+      Iterm2Dimension? w,
+      Iterm2Dimension? h, {
       inline = true,
       preserveAspectRatio = true,
     }) {
@@ -272,7 +285,8 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
 
     final attempts = (_reconnectAttempts[sessionId] ?? 0) + 1;
     _reconnectAttempts[sessionId] = attempts;
-    final delay = Duration(seconds: (attempts * 2).clamp(1, 30));
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, then capped at 30s.
+    final delay = Duration(seconds: (1 << (attempts - 1)).clamp(1, 30));
 
     _reconnectTimers[sessionId]?.cancel();
     _reconnectTimers[sessionId] = Timer(delay, () async {
@@ -282,7 +296,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
 
       try {
         current.sshService.dispose();
-        final newService = SshService();
+        final newService = _transportFactory();
 
         newService.output.listen((data) {
           current.terminal.write(data);
@@ -386,7 +400,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
   /// true, returning a map of successfully started forwards. Individual
   /// failures are swallowed so a broken forward never fails the session.
   Future<Map<String, ActiveForwardInfo>> _startAutoForwards(
-    SshService service,
+    SshTransport service,
     Host host,
   ) async {
     final result = <String, ActiveForwardInfo>{};

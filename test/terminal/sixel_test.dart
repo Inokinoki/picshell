@@ -134,12 +134,12 @@ void main() {
       terminal.onImageDecoded = (
         Uint8List bytes,
         String name,
-        int? w,
-        int? h, {
+        Iterm2Dimension? w,
+        Iterm2Dimension? h, {
         inline = true,
         preserveAspectRatio = true,
       }) {
-        received.add({'bytes': bytes, 'name': name, 'w': w, 'h': h});
+        received.add({'bytes': bytes, 'name': name, 'w': w?.value, 'h': h?.value});
       };
 
       terminal.write('\x1bP0;0;0q#0;2;100;0;0!4~$_st');

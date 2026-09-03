@@ -15,7 +15,7 @@ service ssh start
 
 # Start the app
 log "Starting Picshell..."
-/app/build/linux/arm64/release/bundle/picshell &
+/app/picshell &
 APP_PID=$!
 sleep 5
 

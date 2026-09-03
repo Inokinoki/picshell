@@ -73,7 +73,21 @@ class SshConnectionConfig {
   });
 }
 
-class SshService {
+/// Transport seam so the session lifecycle (connect / reconnect / teardown)
+/// can be driven by tests without a real SSH server.
+abstract interface class SshTransport {
+  Future<void> connect(SshConnectionConfig config);
+  void writeToTerminal(String data);
+  void resizeTerminal(int width, int height);
+  void dispose();
+  Stream<String> get output;
+  Stream<bool> get connectionState;
+  bool get isConnected;
+  Future<int> startForward(ForwardRule rule);
+  Future<void> stopForward(String ruleId);
+}
+
+class SshService implements SshTransport {
   SSHClient? _client;
   /// Jump host client (ProxyJump first hop), if any. Closed alongside [_client]
   /// in [disconnect]. Null for direct connections.

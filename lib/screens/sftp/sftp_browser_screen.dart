@@ -7,6 +7,7 @@ import '../../services/sftp_entry.dart';
 // sftp_service exports the joinPath/parentPath/sftpErrorMessage helpers and
 // the SftpService implementation of the backend.
 import '../../services/sftp_service.dart';
+import '../../services/ssh_service.dart';
 
 /// Full SFTP browser for one session: browse, download, upload, mkdir,
 /// rename, delete. Reached via `/sftp/:sessionId`.
@@ -78,7 +79,8 @@ class _SftpBrowserScreenState extends ConsumerState<SftpBrowserScreen> {
           (s) => s.id == widget.sessionId,
           orElse: () => throw StateError('Session not found'),
         );
-    final created = SftpService(session.sshService);
+    // The default transport factory always builds the real SshService.
+    final created = SftpService(session.sshService as SshService);
     _resolvedForClose = created;
     return created;
   }

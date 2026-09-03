@@ -31,13 +31,19 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
   List<ForwardRule> _forwards = [];
   bool _isEditing = false;
 
+  Host? _loadedHost;
+
   @override
   void initState() {
     super.initState();
     if (widget.hostId != null) {
       _isEditing = true;
       final hosts = ref.read(hostListProvider);
-      final host = hosts.firstWhere((h) => h.id == widget.hostId);
+      // Deep links can carry stale ids; don't crash on an unknown host.
+      _loadedHost = hosts.where((h) => h.id == widget.hostId).firstOrNull;
+    }
+    final host = _loadedHost;
+    if (host != null) {
       _nameController.text = host.name;
       _hostController.text = host.hostname;
       _portController.text = host.port.toString();
@@ -76,14 +82,23 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isEditing ? 'Edit Host' : 'Add Host'),
+        title: Text(_isEditing
+            ? (_loadedHost != null ? 'Edit Host' : 'Host Not Found')
+            : 'Add Host'),
         actions: [IconButton(icon: const Icon(Icons.save), onPressed: _save)],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: ListView(
+        child: RadioGroup<AuthType>(
+          groupValue: _authType,
+          onChanged: (v) {
+            if (v != null) {
+              setState(() => _authType = v);
+            }
+          },
+          child: Form(
+            key: _formKey,
+            child: ListView(
             children: [
               TextFormField(
                 controller: _nameController,
@@ -100,6 +115,13 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
                 controller: _portController,
                 decoration: const InputDecoration(labelText: 'Port'),
                 keyboardType: TextInputType.number,
+                validator: (v) {
+                  final port = int.tryParse(v ?? '');
+                  if (port == null || port < 1 || port > 65535) {
+                    return 'Port must be 1–65535';
+                  }
+                  return null;
+                },
               ),
               TextFormField(
                 controller: _userController,
@@ -110,10 +132,8 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
               _sectionLabel(context, 'Authentication'),
               ListTile(
                 title: const Text('Password'),
-                leading: Radio<AuthType>(
+                leading: const Radio<AuthType>(
                   value: AuthType.password,
-                  groupValue: _authType,
-                  onChanged: (v) => setState(() => _authType = v!),
                 ),
                 contentPadding: EdgeInsets.zero,
                 dense: true,
@@ -132,10 +152,8 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
                 ),
               ListTile(
                 title: const Text('SSH Key'),
-                leading: Radio<AuthType>(
+                leading: const Radio<AuthType>(
                   value: AuthType.key,
-                  groupValue: _authType,
-                  onChanged: (v) => setState(() => _authType = v!),
                 ),
                 contentPadding: EdgeInsets.zero,
                 dense: true,
@@ -156,7 +174,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
                                   labelText: 'Select Key',
                                   border: OutlineInputBorder(),
                                 ),
-                                value: _selectedKeyId,
+                                initialValue: _selectedKeyId,
                                 items: keys
                                     .map(
                                       (k) => DropdownMenuItem(
@@ -184,10 +202,8 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
                   'Uses keys from ~/.ssh/ directory',
                   style: TextStyle(fontSize: 12),
                 ),
-                leading: Radio<AuthType>(
+                leading: const Radio<AuthType>(
                   value: AuthType.agent,
-                  groupValue: _authType,
-                  onChanged: (v) => setState(() => _authType = v!),
                 ),
                 contentPadding: EdgeInsets.zero,
                 dense: true,
@@ -304,6 +320,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
               const SizedBox(height: 16),
               ElevatedButton(onPressed: _save, child: const Text('Save')),
             ],
+            ),
           ),
         ),
       ),
@@ -400,6 +417,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
     final password =
         _authType == AuthType.password ? _passwordController.text : null;
     final keyId = _authType == AuthType.key ? _selectedKeyId : null;
+    final port = int.parse(_portController.text);
     final forwards = List<ForwardRule>.of(_forwards);
     // Never persist an orphaned or chain-forming jump selection (see build).
     final hosts = ref.read(hostListProvider);
@@ -413,10 +431,14 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
         : _proxyHostId;
 
     if (_isEditing) {
-      final host = hosts.firstWhere((h) => h.id == widget.hostId);
+      final host = _loadedHost;
+      if (host == null) {
+        Navigator.pop(context);
+        return;
+      }
       host.name = _nameController.text;
       host.hostname = _hostController.text;
-      host.port = int.tryParse(_portController.text) ?? 22;
+      host.port = port;
       host.username = _userController.text;
       host.authType = _authType;
       host.password = password;
@@ -429,7 +451,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
         id: _uuid.v4(),
         name: _nameController.text,
         hostname: _hostController.text,
-        port: int.tryParse(_portController.text) ?? 22,
+        port: port,
         username: _userController.text,
         authType: _authType,
         password: password,

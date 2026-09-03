@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,12 +21,17 @@ class TerminalWidget extends ConsumerStatefulWidget {
 }
 
 class _TerminalWidgetState extends ConsumerState<TerminalWidget>
-    with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
+    with WidgetsBindingObserver {
+  // NOTE: no AutomaticKeepAliveClientMixin here — keep-alive only functions
+  // under keep-alive-aware parents (IndexedStack/slivers), and this widget is
+  // built in a plain subtree, so the mixin was dead code.
+
+  late final ScrollController _scrollController;
+  bool _pinnedToBottom = true;
   late final KeyboardVisibilityController _keyboardController;
   late final StreamSubscription<bool> _keyboardSubscription;
   late final TerminalController _terminalController;
   late final FocusNode _focusNode;
-  late final ScrollController _scrollController;
   late final TextEditingController _searchFieldController;
   late final FocusNode _searchFieldFocus;
   late final TerminalSearch _search;
@@ -48,10 +56,38 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
   // preserve the current match.
   bool _searchOptionsChanged = true;
 
+  /// Keep the viewport pinned to the live screen. Buffer-clearing sequences
+  /// (cls/clear via ConPTY) append blank lines to the scrollback, which grows
+  /// maxScrollExtent without the render layer's offset following — the view
+  /// then sits a row or two above the real bottom and every new line looks
+  /// displaced even though the buffer cursor is correct. When the user
+  /// scrolls up we stop pinning; returning to the bottom resumes.
+  void _onScroll() {
+    final position = _scrollController.position;
+    if (!position.hasContentDimensions) return;
+    _pinnedToBottom =
+        _scrollController.offset >= position.maxScrollExtent - 2;
+  }
+
+  void _pinToBottom() {
+    if (!_pinnedToBottom || !_scrollController.hasClients) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final position = _scrollController.position;
+      if (position.maxScrollExtent > 0 &&
+          _scrollController.offset < position.maxScrollExtent - 2) {
+        _scrollController.jumpTo(position.maxScrollExtent);
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _scrollController = ScrollController();
+    _scrollController.addListener(_onScroll);
+    widget.terminal.addListener(_pinToBottom);
     _keyboardController = KeyboardVisibilityController();
     _isKeyboardVisible = _keyboardController.isVisible;
     _keyboardSubscription = _keyboardController.onChange.listen((visible) {
@@ -63,7 +99,6 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     });
     _terminalController = TerminalController();
     _focusNode = FocusNode();
-    _scrollController = ScrollController();
     _searchFieldController = TextEditingController();
     // Esc closes the search even while the field has focus (the terminal's
     // onKeyEvent does not fire once the field grabs focus).
@@ -107,6 +142,20 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     _debounce = Timer(const Duration(milliseconds: 150), _runSearch);
   }
 
+  /// Test hook: the scroll position of the terminal viewport.
+  @visibleForTesting
+  ScrollController get debugScrollController => _scrollController;
+
+  @override
+  void didUpdateWidget(TerminalWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.terminal != widget.terminal) {
+      oldWidget.terminal.removeListener(_pinToBottom);
+      widget.terminal.addListener(_pinToBottom);
+      _pinToBottom();
+    }
+  }
+
   @override
   void dispose() {
     widget.terminal.removeListener(_onTerminalChanged);
@@ -114,9 +163,11 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     _keyboardSubscription.cancel();
     _debounce?.cancel();
     _disposeHighlights();
+    widget.terminal.removeListener(_pinToBottom);
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     _terminalController.dispose();
     _focusNode.dispose();
-    _scrollController.dispose();
     _searchFieldController.dispose();
     _searchFieldFocus.dispose();
     super.dispose();
@@ -129,11 +180,8 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
     }
   }
 
-  @override
-  bool get wantKeepAlive => true;
-
   /// Intercepts Ctrl+Shift+F (open search) and Esc (close) before the terminal
-  /// input handler sees them. Everything else — including bare Ctrl+F, which
+  /// input handler sees it. Everything else — including bare Ctrl+F, which
   /// shells and TUIs expect (readline forward-char, emacs, …) — passes through
   /// unchanged. Ctrl+Shift+F mirrors the Ctrl+Shift+C/V copy/paste convention.
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -343,8 +391,6 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
 
   @override
   Widget build(BuildContext context) {
-    super.build(context);
-
     final settings = ref.watch(settingsProvider);
 
     // Theme/style are TerminalView params and hot-swap via updateRenderObject
@@ -388,6 +434,17 @@ class _TerminalWidgetState extends ConsumerState<TerminalWidget>
                 textStyle: textStyle,
                 scrollController: _scrollController,
                 onKeyEvent: _onKey,
+                // The terminal is the screen's primary content — take keyboard
+                // focus on launch and session switches, otherwise keystrokes go
+                // nowhere until the user happens to click inside it.
+                autofocus: true,
+                // Windows' TextInputPlugin silently drops printable-character
+                // insertions for the hidden text field xterm attaches, leaving
+                // special keys (Enter) working while plain typing is dead. On
+                // desktop, take characters straight from hardware key events;
+                // mobile keeps the text-input path for the soft keyboard.
+                hardwareKeyboardOnly:
+                    !kIsWeb && (Platform.isWindows || Platform.isLinux),
               ),
             ),
             if (showKeyboard)
