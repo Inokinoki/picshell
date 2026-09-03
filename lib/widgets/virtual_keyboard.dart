@@ -1,15 +1,48 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
+import '../models/terminal_palette.dart';
+
+/// Colour set for the auxiliary key bar. Derived from the palette's
+/// [TerminalPalette.keyboardBrightness] so a light scheme (e.g. Solarized
+/// Light) gets a light bar instead of the old hardcoded dark one.
+class KeyboardBarStyle {
+  final Color background;
+  final Color keyBackground;
+  final Color foreground;
+
+  const KeyboardBarStyle({
+    required this.background,
+    required this.keyBackground,
+    required this.foreground,
+  });
+
+  static const dark = KeyboardBarStyle(
+    background: Color(0xFF2D2D2D),
+    keyBackground: Color(0xFF404040),
+    foreground: Colors.white,
+  );
+
+  static const light = KeyboardBarStyle(
+    background: Color(0xFFE8E4D8),
+    keyBackground: Color(0xFFFDF6E3),
+    foreground: Color(0xFF586E75),
+  );
+
+  static KeyboardBarStyle forBrightness(Brightness brightness) =>
+      brightness == Brightness.light ? light : dark;
+}
 
 class VirtualKeyboardBar extends StatefulWidget {
   final Terminal terminal;
   final TerminalController? controller;
+  final Brightness keyboardBrightness;
 
   const VirtualKeyboardBar({
     super.key,
     required this.terminal,
     this.controller,
+    this.keyboardBrightness = Brightness.dark,
   });
 
   @override
@@ -24,7 +57,7 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
   Widget build(BuildContext context) {
     return Container(
       height: 44,
-      color: const Color(0xFF2D2D2D),
+      color: _style.background,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
@@ -56,6 +89,9 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
     );
   }
 
+  KeyboardBarStyle get _style =>
+      KeyboardBarStyle.forBrightness(widget.keyboardBrightness);
+
   Widget _buildKey(
     String label, {
     IconData? icon,
@@ -64,7 +100,7 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 3),
       child: Material(
-        color: const Color(0xFF404040),
+        color: _style.keyBackground,
         borderRadius: BorderRadius.circular(6),
         child: InkWell(
           onTap: onTap,
@@ -72,11 +108,11 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: icon != null
-                ? Icon(icon, color: Colors.white, size: 18)
+                ? Icon(icon, color: _style.foreground, size: 18)
                 : Text(
                     label,
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: _style.foreground,
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
                     ),
@@ -91,7 +127,7 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 3),
       child: Material(
-        color: active ? Colors.teal.shade700 : const Color(0xFF404040),
+        color: active ? Colors.teal.shade700 : _style.keyBackground,
         borderRadius: BorderRadius.circular(6),
         child: InkWell(
           onTap: onTap,
@@ -101,7 +137,7 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
             child: Text(
               label,
               style: TextStyle(
-                color: active ? Colors.white : Colors.white70,
+                color: active ? Colors.white : _style.foreground,
                 fontSize: 14,
                 fontWeight: active ? FontWeight.bold : FontWeight.w500,
               ),
@@ -158,12 +194,15 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
 
     final buffer = widget.terminal.buffer;
     final text = StringBuffer();
+    // The raw selection is anchored at the drag start; normalise so
+    // right-to-left / bottom-to-top selections iterate the same range.
+    final range = selection.normalized;
 
-    for (var y = selection.begin.y; y <= selection.end.y; y++) {
+    for (var y = range.begin.y; y <= range.end.y; y++) {
       final line = buffer.lines[y];
 
-      final startX = y == selection.begin.y ? selection.begin.x : 0;
-      final endX = y == selection.end.y ? selection.end.x : line.length - 1;
+      final startX = y == range.begin.y ? range.begin.x : 0;
+      final endX = y == range.end.y ? range.end.x : line.length - 1;
 
       for (var x = startX; x <= endX; x++) {
         final charCode = line.getCodePoint(x);
@@ -172,7 +211,7 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
         }
       }
 
-      if (y < selection.end.y) {
+      if (y < range.end.y) {
         text.write('\n');
       }
     }
@@ -192,8 +231,9 @@ class _VirtualKeyboardBarState extends State<VirtualKeyboardBar> {
     _resetModifiers();
   }
 
-  void _paste() async {
+  Future<void> _paste() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
     if (data?.text != null) {
       widget.terminal.textInput(data!.text!);
     }

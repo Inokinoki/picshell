@@ -51,8 +51,13 @@ class _FakeHostStore implements HostStore {
   Future<void> deleteSession(String id) async {}
   @override
   bool get isEncrypting => false;
+
+  @override
+  bool get hasUnmarkedSecrets => false;
   @override
   void setPassphrase(String passphrase) {}
+  @override
+  Future<void> reEncryptAll(String newPassphrase) async {}
 }
 
 SshKey _key(String id, String name, {String pub = 'ssh-ed25519 AAAA'}) =>

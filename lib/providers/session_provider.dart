@@ -1,26 +1,40 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import 'package:xterm/xterm.dart';
 import '../models/floating_image.dart';
+import '../models/forward_rule.dart';
 import '../models/host.dart';
 import '../services/known_hosts_store.dart';
 import '../services/ssh_service.dart';
 import 'floating_image_provider.dart';
+import 'host_provider.dart';
 
 const _uuid = Uuid();
+
+/// Snapshot of one running forward for UI display. The source of truth lives
+/// inside [SshService.activeForwards]; this mirrors only what the UI needs.
+class ActiveForwardInfo {
+  final ForwardType type;
+  final int boundPort;
+  const ActiveForwardInfo(this.type, this.boundPort);
+}
 
 class SessionState {
   final String id;
   final Host host;
-  final SshService sshService;
+  final SshTransport sshService;
   final Terminal terminal;
   final bool connected;
   final bool reconnecting;
   final DateTime createdAt;
   final SshConnectionConfig? config;
+
+  /// ruleId → info for forwards currently running on this session. Reset to
+  /// empty whenever the underlying [SshService] is rebuilt (e.g. on reconnect)
+  /// and repopulated from [Host.forwards] with [ForwardRule.autoStart] = true.
+  final Map<String, ActiveForwardInfo> runningForwards;
 
   SessionState({
     required this.id,
@@ -31,8 +45,32 @@ class SessionState {
     this.reconnecting = false,
     DateTime? createdAt,
     this.config,
+    Map<String, ActiveForwardInfo>? runningForwards,
   }) : terminal = terminal ?? Terminal(maxLines: 10000),
-       createdAt = createdAt ?? DateTime.now();
+       createdAt = createdAt ?? DateTime.now(),
+       runningForwards = runningForwards ?? const {};
+
+  /// Returns a copy with the given fields replaced. Immutable fields (id,
+  /// host, terminal, createdAt, config) stay as-is. Used everywhere the
+  /// notifier updates a session so adding a field only touches this method.
+  SessionState copyWith({
+    bool? connected,
+    bool? reconnecting,
+    SshTransport? sshService,
+    Map<String, ActiveForwardInfo>? runningForwards,
+  }) {
+    return SessionState(
+      id: id,
+      host: host,
+      sshService: sshService ?? this.sshService,
+      terminal: terminal,
+      connected: connected ?? this.connected,
+      reconnecting: reconnecting ?? this.reconnecting,
+      createdAt: createdAt,
+      config: config,
+      runningForwards: runningForwards ?? this.runningForwards,
+    );
+  }
 }
 
 final sessionListProvider =
@@ -42,8 +80,13 @@ final sessionListProvider =
 
 class SessionListNotifier extends StateNotifier<List<SessionState>> {
   final Ref _ref;
+  final SshTransport Function() _transportFactory;
 
-  SessionListNotifier(this._ref) : super([]);
+  SessionListNotifier(
+    this._ref, {
+    @visibleForTesting SshTransport Function()? transportFactory,
+  })  : _transportFactory = transportFactory ?? SshService.new,
+        super([]);
 
   @visibleForTesting
   void debugAddSession(SessionState session) {
@@ -55,8 +98,45 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     // carries an onVerifyHostKey callback consulting the known_hosts store;
     // the original config from the UI does not have one. This derived config
     // is what gets stored on the SessionState, so reconnects are verified too.
-    final knownHosts = _ref.read(knownHostsStoreProvider);
-    final verifiedConfig = SshConnectionConfig(
+    //
+    // The callback must NOT throw: newer dartssh2 swallows callback
+    // exceptions and fails the connect with a generic
+    // "connection closed before authentication" SSHAuthAbortError, which
+    // would hide the TOFU prompt. Instead we record the rejection, return
+    // false, and re-raise the typed exception after connect() fails.
+    HostKeyVerification? hostKeyRejection;
+    String? rejectedKeyType;
+    Uint8List? rejectedFingerprint;
+    void recordRejection(
+        HostKeyVerification result, String type, Uint8List fingerprint) {
+      hostKeyRejection = result;
+      rejectedKeyType = type;
+      rejectedFingerprint = fingerprint;
+    }
+
+    // Resolve an optional jump host from the host list and build a nested
+    // config for it. _withTofu injects per-hop host-key verification, so the
+    // jump host is TOFU-checked independently of the final target. Single hop
+    // is exposed in the UI; the recursive _withTofu already supports chains.
+    SshConnectionConfig? proxyConfig;
+    if (host.proxyHostId != null) {
+      final proxyHost = _resolveProxy(host.proxyHostId!);
+      if (proxyHost == null) {
+        throw StateError(
+          'Jump host ${host.proxyHostId} no longer exists',
+        );
+      }
+      // Nested jumps (jump-via-jump) are not exposed in the UI; refuse
+      // clearly instead of silently connecting directly to the jump host.
+      if (proxyHost.proxyHostId != null) {
+        throw StateError(
+          "Jump host '${proxyHost.name}' itself routes via a jump host, "
+          'which is not supported. Clear its jump setting first.',
+        );
+      }
+      proxyConfig = _withTofu(_configFromHost(proxyHost), recordRejection);
+    }
+    final verifiedConfig = _withTofu(SshConnectionConfig(
       host: config.host,
       port: config.port,
       username: config.username,
@@ -64,43 +144,34 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       password: config.password,
       privateKeyPem: config.privateKeyPem,
       passphrase: config.passphrase,
-      onVerifyHostKey: (type, fingerprint) async {
-        switch (await knownHosts.verify(
-          config.host, config.port, type, fingerprint,
-        )) {
-          case HostKeyVerification.trusted:
-            return true;
-          case HostKeyVerification.mismatch:
-            throw HostKeyMismatchException(
-              config.host, config.port, type,
-              _hex(fingerprint),
-            );
-          case HostKeyVerification.unknown:
-            throw UnknownHostException(
-              config.host, config.port, type,
-              _hex(fingerprint),
-            );
-        }
-      },
-    );
+      proxyConfig: proxyConfig,
+    ), recordRejection);
 
-    final service = SshService();
+    final service = _transportFactory();
     final terminal = Terminal(maxLines: 10000);
     final sessionId = _uuid.v4();
     final createdAt = DateTime.now();
 
-    terminal.onOutput = (data) {
-      service.writeToTerminal(data);
-    };
+    // Resolve the session's current transport on every call: an
+    // auto-reconnect replaces SessionState.sshService, and a closure over
+    // the original instance would silently drop user input after the swap.
+    SshTransport? currentService() {
+      for (final s in state) {
+        if (s.id == sessionId) return s.sshService;
+      }
+      return null;
+    }
+
+    terminal.onOutput = (data) => currentService()?.writeToTerminal(data);
     terminal.onResize = (width, height, pixelWidth, pixelHeight) {
-      service.resizeTerminal(width, height);
+      currentService()?.resizeTerminal(width, height);
     };
 
     terminal.onImageDecoded = (
       Uint8List bytes,
       String imgName,
-      int? w,
-      int? h, {
+      Iterm2Dimension? w,
+      Iterm2Dimension? h, {
       inline = true,
       preserveAspectRatio = true,
     }) {
@@ -139,23 +210,51 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
 
     try {
       await service.connect(verifiedConfig);
-      state = [
-        for (final s in state)
-          if (s.id == session.id)
-            SessionState(
-              id: s.id,
-              host: s.host,
-              sshService: s.sshService,
-              terminal: s.terminal,
-              connected: true,
-            )
-          else
-            s,
-      ];
+      final forwards = await _startAutoForwards(service, host);
+      _patch(sessionId, (s) => s.copyWith(
+        connected: true,
+        runningForwards: forwards,
+      ));
     } catch (e) {
       closeSession(session.id);
+      // Restore the typed host-key exceptions the UI knows how to present.
+      if (hostKeyRejection != null) {
+        final fingerprint = canonicalHostKeyFingerprint(rejectedFingerprint!);
+        if (hostKeyRejection == HostKeyVerification.mismatch) {
+          throw HostKeyMismatchException(
+            config.host, config.port, rejectedKeyType!, fingerprint,
+          );
+        }
+        throw UnknownHostException(
+          config.host, config.port, rejectedKeyType!, fingerprint,
+        );
+      }
       rethrow;
     }
+  }
+
+  /// Starts [rule] on the session and records it in [SessionState.runningForwards].
+  /// Returns the actually bound port. Throws if the session is not connected
+  /// or the forward fails to bind.
+  Future<int> startForward(String sessionId, ForwardRule rule) async {
+    final session = _lookup(sessionId);
+    final port = await session.sshService.startForward(rule);
+    _patch(sessionId, (s) => s.copyWith(
+      runningForwards: Map<String, ActiveForwardInfo>.from(s.runningForwards)
+        ..[rule.id] = ActiveForwardInfo(rule.type, port),
+    ));
+    return port;
+  }
+
+  /// Stops a running forward by rule id. No-op if not running.
+  Future<void> stopForward(String sessionId, String ruleId) async {
+    final session = _lookup(sessionId);
+    await session.sshService.stopForward(ruleId);
+    _patch(sessionId, (s) {
+      final updated = Map<String, ActiveForwardInfo>.from(s.runningForwards)
+        ..remove(ruleId);
+      return s.copyWith(runningForwards: updated);
+    });
   }
 
   void closeSession(String id) {
@@ -176,25 +275,17 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     final session = state.where((s) => s.id == sessionId).firstOrNull;
     if (session == null || session.config == null) return;
 
-    state = [
-      for (final s in state)
-        if (s.id == sessionId)
-          SessionState(
-            id: s.id,
-            host: s.host,
-            sshService: s.sshService,
-            terminal: s.terminal,
-            connected: false,
-            reconnecting: true,
-            config: s.config,
-          )
-        else
-          s,
-    ];
+    _patch(sessionId, (s) => s.copyWith(
+      connected: false,
+      reconnecting: true,
+      // Forwards died with the connection; clear them until reconnect succeeds.
+      runningForwards: const {},
+    ));
 
     final attempts = (_reconnectAttempts[sessionId] ?? 0) + 1;
     _reconnectAttempts[sessionId] = attempts;
-    final delay = Duration(seconds: (attempts * 2).clamp(1, 30));
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, then capped at 30s.
+    final delay = Duration(seconds: (1 << (attempts - 1)).clamp(1, 30));
 
     _reconnectTimers[sessionId]?.cancel();
     _reconnectTimers[sessionId] = Timer(delay, () async {
@@ -204,7 +295,7 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
 
       try {
         current.sshService.dispose();
-        final newService = SshService();
+        final newService = _transportFactory();
 
         newService.output.listen((data) {
           current.terminal.write(data);
@@ -218,35 +309,108 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
         });
 
         await newService.connect(current.config!);
+        final forwards = await _startAutoForwards(newService, current.host);
         _reconnectAttempts.remove(sessionId);
 
-        state = [
-          for (final s in state)
-            if (s.id == sessionId)
-              SessionState(
-                id: s.id,
-                host: s.host,
-                sshService: newService,
-                terminal: s.terminal,
-                connected: true,
-                reconnecting: false,
-                config: s.config,
-              )
-            else
-              s,
-        ];
+        _patch(sessionId, (s) => s.copyWith(
+          sshService: newService,
+          connected: true,
+          reconnecting: false,
+          runningForwards: forwards,
+        ));
       } catch (_) {
         if (mounted) _scheduleReconnect(sessionId);
       }
     });
   }
-}
 
-/// Hex-encodes a byte list for display in host-key exception messages.
-String _hex(Uint8List bytes) {
-  final sb = StringBuffer();
-  for (final b in bytes) {
-    sb.write(b.toRadixString(16).padLeft(2, '0'));
+  SessionState _lookup(String id) => state.firstWhere(
+        (s) => s.id == id,
+        orElse: () => throw StateError('Session $id not found'),
+      );
+
+  /// Returns [config] with an [SshConnectionConfig.onVerifyHostKey] callback
+  /// that consults the known_hosts store (TOFU). Applied recursively to any
+  /// nested [SshConnectionConfig.proxyConfig] so every hop is verified.
+  SshConnectionConfig _withTofu(SshConnectionConfig config,
+      [void Function(HostKeyVerification, String, Uint8List)? onRejected]) {
+    final knownHosts = _ref.read(knownHostsStoreProvider);
+    return SshConnectionConfig(
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      authMethod: config.authMethod,
+      password: config.password,
+      privateKeyPem: config.privateKeyPem,
+      passphrase: config.passphrase,
+      proxyConfig: config.proxyConfig == null
+          ? null
+          : _withTofu(config.proxyConfig!, onRejected),
+      onVerifyHostKey: (type, fingerprint) async {
+        final result = await knownHosts.verify(
+          config.host, config.port, type, fingerprint,
+        );
+        if (result == HostKeyVerification.trusted) return true;
+        // Never throw from here: newer dartssh2 swallows callback
+        // exceptions, hiding the TOFU prompt behind a generic auth abort.
+        // Record the rejection and let openSession re-raise it typed.
+        onRejected?.call(result, type, fingerprint);
+        return false;
+      },
+    );
   }
-  return sb.toString();
+
+  /// Builds a connection config from a saved [Host], reading its key material
+  /// (decrypted) from the store. Used to construct jump-host configs from a
+  /// stored proxyHostId. Agent auth is left as-is — connect() will reject it
+  /// when a proxyConfig is present.
+  SshConnectionConfig _configFromHost(Host host) {
+    String? privateKeyPem;
+    if (host.authType == AuthType.key && host.keyId != null) {
+      privateKeyPem =
+          _ref.read(hostStoreProvider).getKey(host.keyId!)?.privateKeyPem;
+    }
+    return SshConnectionConfig(
+      host: host.hostname,
+      port: host.port,
+      username: host.username,
+      authMethod: _authMethodFor(host.authType),
+      password: host.authType == AuthType.password ? host.password : null,
+      privateKeyPem: privateKeyPem,
+    );
+  }
+
+  Host? _resolveProxy(String id) {
+    final hosts = _ref.read(hostListProvider);
+    return hosts.where((h) => h.id == id).firstOrNull;
+  }
+
+  SshAuthMethod _authMethodFor(AuthType type) => switch (type) {
+        AuthType.password => SshAuthMethod.password,
+        AuthType.key => SshAuthMethod.key,
+        AuthType.agent => SshAuthMethod.agent,
+      };
+
+  void _patch(String id, SessionState Function(SessionState) fn) {
+    state = [for (final s in state) if (s.id == id) fn(s) else s];
+  }
+
+  /// Starts every [ForwardRule] on [host] whose [ForwardRule.autoStart] is
+  /// true, returning a map of successfully started forwards. Individual
+  /// failures are swallowed so a broken forward never fails the session.
+  Future<Map<String, ActiveForwardInfo>> _startAutoForwards(
+    SshTransport service,
+    Host host,
+  ) async {
+    final result = <String, ActiveForwardInfo>{};
+    for (final rule in host.forwards.where((f) => f.autoStart)) {
+      try {
+        final port = await service.startForward(rule);
+        result[rule.id] = ActiveForwardInfo(rule.type, port);
+      } catch (_) {
+        // Best-effort: leave it unstarted; user can retry from the UI.
+      }
+    }
+    return result;
+  }
 }

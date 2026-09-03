@@ -100,7 +100,8 @@ class EscapeParser {
     'E'.charCode: _escHandleNextLine,
     'H'.charCode: _escHandleTabSet,
     'M'.charCode: _escHandleReverseIndex,
-    // 'P'.charCode: _unsupportedHandler, // Sixel
+    'P'.charCode: _escHandleDcs, // DCS — Sixel graphics (ESC P ... ST)
+    '_'.charCode: _escHandleApc, // APC — Kitty graphics (ESC _ ... ST)
     // 'c'.charCode: _unsupportedHandler,
     // '#'.charCode: _unsupportedHandler,
     '('.charCode: _escHandleDesignateCharset0, //  SCS - G0
@@ -497,9 +498,11 @@ class EscapeParser {
           handler.setForegroundColor16(NamedColor.white);
           continue;
         case 38:
+          if (i + 1 >= params.length) continue;
           final mode = params[i + 1];
           switch (mode) {
             case 2:
+              if (i + 4 >= params.length) continue;
               final r = params[i + 2];
               final g = params[i + 3];
               final b = params[i + 4];
@@ -507,6 +510,7 @@ class EscapeParser {
               i += 4;
               break;
             case 5:
+              if (i + 2 >= params.length) continue;
               final index = params[i + 2];
               handler.setForegroundColor256(index);
               i += 2;
@@ -542,9 +546,11 @@ class EscapeParser {
           handler.setBackgroundColor16(NamedColor.white);
           continue;
         case 48:
+          if (i + 1 >= params.length) continue;
           final mode = params[i + 1];
           switch (mode) {
             case 2:
+              if (i + 4 >= params.length) continue;
               final r = params[i + 2];
               final g = params[i + 3];
               final b = params[i + 4];
@@ -552,6 +558,7 @@ class EscapeParser {
               i += 4;
               break;
             case 5:
+              if (i + 2 >= params.length) continue;
               final index = params[i + 2];
               handler.setBackgroundColor256(index);
               i += 2;
@@ -1051,6 +1058,9 @@ class EscapeParser {
     if (!consumed) {
       return false;
     }
+    if (_payloadOverflowed) {
+      return true; // oversized — consumed but dropped
+    }
 
     if (_osc.isEmpty) {
       return true;
@@ -1083,15 +1093,21 @@ class EscapeParser {
 
   final _osc = <String>[];
 
+  /// Total OSC characters accumulated in the current sequence, to enforce
+  /// [_maxPayloadLength] (OSC splits its payload into `;`-separated params, so
+  /// each param is short but a hostile stream can grow them without bound).
+  int _oscLength = 0;
+
   bool _consumeOsc() {
     _osc.clear();
+    _payloadOverflowed = false;
+    _oscLength = 0;
     final param = StringBuffer();
 
     while (true) {
-      if (_queue.isEmpty) {
-        return false;
-      }
-
+      // Doomed oversized sequence — consume instead of rolling back (see
+      // _consumeUntilSt), so bytes aren't re-scanned on every write().
+      if (_queue.isEmpty) return _payloadOverflowed;
       final char = _queue.consume();
 
       // OSC terminates with BEL
@@ -1103,24 +1119,196 @@ class EscapeParser {
       /// OSC terminates with ST
       if (char == Ascii.ESC) {
         if (_queue.isEmpty) {
-          return false;
+          // Partial ST — rollback and retry on the next write() (see
+          // _consumeUntilSt). An already-overflowed sequence is doomed —
+          // consume it instead of rolling back for a hostile
+          // lone-ESC-at-end stream.
+          return _payloadOverflowed;
         }
 
-        if (_queue.consume() == Ascii.backslash) {
+        final next = _queue.consume();
+        if (next == Ascii.backslash) {
           _osc.add(param.toString());
+          return true; // ST
         }
-
-        return true;
+        // A lone ESC inside the payload is NOT a terminator (only `ESC \` or
+        // BEL is) — treat both bytes as payload so a follow-up write starting
+        // with its own escape sequence doesn't falsely terminate this one
+        // mid-stream and leak its remainder into the text grid.
+        _oscAccumulate(param, Ascii.ESC);
+        _oscAccumulate(param, next);
+        continue;
       }
 
       /// Parse next parameter
       if (char == Ascii.semicolon) {
-        _osc.add(param.toString());
+        // Semicolons count toward the cap too — a flood of them grows _osc
+        // (one entry each) just like payload chars grow param.
+        if (_oscLength >= _maxPayloadLength) {
+          _payloadOverflowed = true;
+        } else {
+          _osc.add(param.toString());
+          _oscLength++;
+        }
         param.clear();
         continue;
       }
 
+      // Past the cap, keep consuming (so bytes aren't rolled back and
+      // re-scanned on the next write) but stop accumulating.
+      _oscAccumulate(param, char);
+    }
+  }
+
+  /// Appends one payload char to [param], enforcing [_maxPayloadLength].
+  void _oscAccumulate(StringBuffer param, int char) {
+    if (_oscLength >= _maxPayloadLength) {
+      _payloadOverflowed = true;
+    } else {
+      _oscLength++;
       param.writeCharCode(char);
+    }
+  }
+
+  final _apcPayload = StringBuffer();
+  final _dcsPayload = StringBuffer();
+  String _dcsCommand = '';
+
+  /// Cap on APC/DCS/OSC payload accumulation, to bound memory and CPU on
+  /// untrusted remote output. Without it an unterminated `ESC _`/`ESC P`/
+  /// `ESC ]` stream would
+  /// (a) grow the payload buffer without limit and (b) be rolled back and
+  /// re-scanned from scratch on every write() — O(n²). Once the cap is hit the
+  /// sequence is still consumed up to its terminator but dropped (not handed
+  /// to the handler), so bytes are never re-scanned.
+  static const _maxPayloadLength = 4 * 1024 * 1024; // 4 MiB
+
+  /// Set by [_consumeUntilSt]/[_consumeDcs] when the payload exceeded
+  /// [_maxPayloadLength]; the callers drop the sequence instead of emitting it.
+  bool _payloadOverflowed = false;
+
+  /// `ESC _ ... ST` — Application Program Command (Kitty graphics). The whole
+  /// payload is handed to [EscapeHandler.apc] as one string.
+  bool _escHandleApc() {
+    if (!_consumeUntilSt(_apcPayload)) return false;
+    if (_payloadOverflowed) return true; // oversized — consumed but dropped
+    handler.apc(_apcPayload.toString());
+    return true;
+  }
+
+  /// `ESC P ... ST` — Device Control String (Sixel graphics). The leading
+  /// command prefix (params + final byte, e.g. `q`) and the data body are
+  /// handed to [EscapeHandler.dcs].
+  bool _escHandleDcs() {
+    if (!_consumeDcs()) return false;
+    if (_payloadOverflowed) return true; // oversized — consumed but dropped
+    handler.dcs(_dcsCommand, _dcsPayload.toString());
+    return true;
+  }
+
+  /// Collects everything up to BEL or ST into [buffer] as a single string.
+  bool _consumeUntilSt(StringBuffer buffer) {
+    buffer.clear();
+    _payloadOverflowed = false;
+    while (true) {
+      // Once the payload overflowed the sequence is doomed; consume it (drop)
+      // rather than rolling back — avoids re-scanning megabytes on every
+      // write() of an unterminated hostile stream.
+      if (_queue.isEmpty) return _payloadOverflowed;
+      final char = _queue.consume();
+      if (char == Ascii.BEL) return true;
+      if (char == Ascii.ESC) {
+        if (_queue.isEmpty) {
+          // ST (ESC \) straddles a write() chunk boundary — hand back the
+          // consumed bytes so the whole sequence is re-driven once more data
+          // arrives (mirrors _consumeOsc). Returning true here would drop the
+          // sequence and leak a literal backslash into the text grid.
+          // Exception: an already-overflowed sequence is doomed — consume it
+          // instead of rolling back megabytes for a hostile lone-ESC-at-end
+          // stream (O(n²) rescan).
+          return _payloadOverflowed;
+        }
+        final next = _queue.consume();
+        if (next == Ascii.backslash) return true; // ST
+        // A lone ESC inside the payload is NOT a terminator (only `ESC \` or
+        // BEL is) — treat both bytes as payload so a follow-up write starting
+        // with its own escape sequence doesn't falsely terminate this one
+        // mid-stream and leak its remainder into the text grid.
+        _writePayloadBytes(buffer, [Ascii.ESC, next]);
+        continue;
+      }
+      // Past the cap, keep consuming (so bytes aren't rolled back and
+      // re-scanned on the next write) but stop accumulating.
+      if (buffer.length >= _maxPayloadLength) {
+        _payloadOverflowed = true;
+      } else {
+        buffer.writeCharCode(char);
+      }
+    }
+  }
+
+  /// Consumes a DCS sequence. The leading command prefix (param bytes
+  /// 0x30-0x3f, intermediates 0x20-0x2f, and the final byte 0x40-0x7e) is
+  /// captured in [_dcsCommand]; the rest is the data body in [_dcsPayload].
+  bool _consumeDcs() {
+    _dcsPayload.clear();
+    _dcsCommand = '';
+    _payloadOverflowed = false;
+    var inCommand = true;
+    while (true) {
+      // Doomed oversized sequence — consume instead of rolling back (see
+      // _consumeUntilSt).
+      if (_queue.isEmpty) return _payloadOverflowed;
+      final char = _queue.consume();
+      if (char == Ascii.BEL) return true;
+      if (char == Ascii.ESC) {
+        if (_queue.isEmpty) {
+          // Partial ST — rollback and retry on the next write() (see above).
+          // An already-overflowed sequence is doomed — consume it instead of
+          // rolling back for a hostile lone-ESC-at-end stream.
+          return _payloadOverflowed;
+        }
+        final next = _queue.consume();
+        if (next == Ascii.backslash) return true; // ST
+        // Lone ESC — payload bytes, not a terminator (see _consumeUntilSt).
+        inCommand = false;
+        _writePayload(Ascii.ESC);
+        _writePayload(next);
+        continue;
+      }
+      if (inCommand) {
+        if (char >= 0x20 && char <= 0x3f) {
+          _dcsCommand += String.fromCharCode(char);
+        } else if (char >= 0x40 && char <= 0x7e) {
+          _dcsCommand += String.fromCharCode(char);
+          inCommand = false; // final byte — data follows
+        } else {
+          inCommand = false;
+          _writePayload(char);
+        }
+      } else {
+        _writePayload(char);
+      }
+    }
+  }
+
+  /// Appends payload bytes to [buffer], enforcing [_maxPayloadLength].
+  void _writePayloadBytes(StringBuffer buffer, List<int> chars) {
+    for (final c in chars) {
+      if (buffer.length >= _maxPayloadLength) {
+        _payloadOverflowed = true;
+      } else {
+        buffer.writeCharCode(c);
+      }
+    }
+  }
+
+  /// Appends a payload byte to [_dcsPayload], enforcing [_maxPayloadLength].
+  void _writePayload(int char) {
+    if (_dcsPayload.length >= _maxPayloadLength) {
+      _payloadOverflowed = true;
+    } else {
+      _dcsPayload.writeCharCode(char);
     }
   }
 }

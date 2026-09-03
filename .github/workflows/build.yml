@@ -24,7 +24,7 @@ jobs:
 
       - run: flutter pub get
 
-      - run: flutter analyze lib --no-fatal-infos
+      - run: flutter analyze --no-fatal-infos
 
       - run: flutter test test/
 
@@ -33,12 +33,14 @@ jobs:
           keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
 
       - name: Build signed APK
-        run: |
-          flutter build apk --debug \
-            --dart-define=KEYSTORE_PATH=debug.keystore \
-            --dart-define=KEYSTORE_PASSWORD=android \
-            --dart-define=KEY_ALIAS=androiddebugkey \
-            --dart-define=KEY_PASSWORD=android
+        # The signing config is read by Gradle from the environment, not from
+        # --dart-define (which is for Dart code and was silently ignored).
+        env:
+          KEYSTORE_PATH: debug.keystore
+          KEYSTORE_PASSWORD: android
+          KEY_ALIAS: androiddebugkey
+          KEY_PASSWORD: android
+        run: flutter build apk --debug
 
       - uses: actions/upload-artifact@v4
         with:

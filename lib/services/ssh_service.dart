@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
+import '../models/forward_rule.dart';
 import 'agent_forward_service.dart';
+import 'forward_listener.dart';
 
 enum SshAuthMethod { password, key, agent }
 
@@ -50,6 +52,14 @@ class SshConnectionConfig {
   final FutureOr<bool> Function(String type, Uint8List fingerprint)?
       onVerifyHostKey;
 
+  /// Optional nested config for a jump host (ProxyJump, `ssh -J`). When set,
+  /// [SshService.connect] first authenticates to the proxy, then opens a
+  /// direct-tcpip channel through it to reach [host]:[port]. Nested so that
+  /// future multi-hop chains can be expressed as proxyConfig.proxyConfig.
+  /// Production callers must populate [onVerifyHostKey] on every hop —
+  /// [SessionListNotifier.openSession] does this for both hops.
+  final SshConnectionConfig? proxyConfig;
+
   SshConnectionConfig({
     required this.host,
     this.port = 22,
@@ -59,11 +69,29 @@ class SshConnectionConfig {
     this.privateKeyPem,
     this.passphrase,
     this.onVerifyHostKey,
+    this.proxyConfig,
   });
 }
 
-class SshService {
+/// Transport seam so the session lifecycle (connect / reconnect / teardown)
+/// can be driven by tests without a real SSH server.
+abstract interface class SshTransport {
+  Future<void> connect(SshConnectionConfig config);
+  void writeToTerminal(String data);
+  void resizeTerminal(int width, int height);
+  void dispose();
+  Stream<String> get output;
+  Stream<bool> get connectionState;
+  bool get isConnected;
+  Future<int> startForward(ForwardRule rule);
+  Future<void> stopForward(String ruleId);
+}
+
+class SshService implements SshTransport {
   SSHClient? _client;
+  /// Jump host client (ProxyJump first hop), if any. Closed alongside [_client]
+  /// in [disconnect]. Null for direct connections.
+  SSHClient? _jumpClient;
   SSHSession? _session;
   final StreamController<String> _outputController =
       StreamController.broadcast();
@@ -71,11 +99,64 @@ class SshService {
       StreamController.broadcast();
   StreamSubscription<Uint8List>? _stdoutSubscription;
   StreamSubscription<Uint8List>? _stderrSubscription;
+  /// Active forwards keyed by their [ForwardRule.id]. Torn down on disconnect.
+  final Map<String, ActiveForward> _activeForwards = {};
   bool _disposed = false;
 
+  @override
   Stream<String> get output => _outputController.stream;
+  @override
   Stream<bool> get connectionState => _connectionController.stream;
+  @override
   bool get isConnected => _client != null && _session != null;
+
+  /// The live SSH client, or null when not connected. Exposed so the session
+  /// layer can attach forwards and ProxyJump channels; SFTP support opens a
+  /// subsystem on it too. Callers must re-acquire it after a reconnect (which
+  /// replaces `_client`). Returns null once [disconnect] / [dispose] has run.
+  SSHClient? get client => _client;
+
+  /// Read-only view of currently running forwards (for UI status).
+  Map<String, ActiveForward> get activeForwards =>
+      Map.unmodifiable(_activeForwards);
+
+  /// Starts [rule] on the current client. Returns the actually bound port
+  /// (which may differ from [ForwardRule.localPort] when 0 was requested).
+  /// Throws if the client is not connected or the rule is already running.
+  /// Concurrent calls for the same rule id are single-flighted: both await
+  /// the same bind and get the same port instead of racing to bind twice.
+  @override
+  Future<int> startForward(ForwardRule rule) async {
+    final client = _client;
+    if (client == null) {
+      throw StateError('Cannot start forward: SSH client not connected');
+    }
+    final existing = _activeForwards[rule.id];
+    if (existing != null) return existing.boundPort;
+    final pending = _pendingForwards[rule.id];
+    if (pending != null) return (await pending).boundPort;
+
+    final future = ActiveForward.bind(client, rule);
+    _pendingForwards[rule.id] = future;
+    try {
+      final forward = await future;
+      _activeForwards[rule.id] = forward;
+      return forward.boundPort;
+    } finally {
+      _pendingForwards.remove(rule.id);
+    }
+  }
+
+  /// In-flight [startForward] binds keyed by rule id, for single-flight.
+  final Map<String, Future<ActiveForward>> _pendingForwards = {};
+
+  /// Stops a running forward by its rule id. No-op if not running.
+  @override
+  Future<void> stopForward(String ruleId) async {
+    final forward = _activeForwards.remove(ruleId);
+    if (forward != null) await forward.stop();
+  }
+
 
   void _safeAddOutput(String data) {
     if (!_disposed && !_outputController.isClosed) {
@@ -95,47 +176,56 @@ class SshService {
     }
   }
 
+  @override
   Future<void> connect(SshConnectionConfig config) async {
     try {
-      _safeAddConnection(false);
+      // No initial `false` emission here: openSession subscribes to
+      // connectionState BEFORE awaiting connect(), so a synthetic
+      // "disconnected" would instantly schedule a bogus reconnect that
+      // disposes the healthy connection 2s later (input then dies with the
+      // old transport). Emit only real transitions.
 
-      final socket = await SSHSocket.connect(config.host, config.port);
+      // ProxyJump: authenticate to the jump host first, then open a
+      // direct-tcpip channel through it which becomes the target's socket.
+      // dartssh2's SSHForwardChannel implements SSHSocket, so it composes
+      // cleanly as the transport for the next SSHClient.
+      final SSHSocket socket;
+      if (config.proxyConfig != null) {
+        final proxy = config.proxyConfig!;
+        final jumpSocket = await SSHSocket.connect(proxy.host, proxy.port);
+        final jumpClient = _buildClient(jumpSocket, proxy);
+        try {
+          await jumpClient.authenticated;
+          _jumpClient = jumpClient;
+          socket = await jumpClient.forwardLocal(config.host, config.port);
+        } catch (_) {
+          // Never leak an authenticated (or half-open) jump connection when
+          // the target is unreachable or the shell handshake fails.
+          if (_jumpClient == jumpClient) _jumpClient = null;
+          jumpClient.close();
+          rethrow;
+        }
+      } else {
+        socket = await SSHSocket.connect(config.host, config.port);
+      }
 
+      // Agent auth reads ~/.ssh and dials its own socket, so it only works for
+      // direct connections. ProxyJump + agent is rejected in _buildClient.
       SSHClient client;
-      switch (config.authMethod) {
-        case SshAuthMethod.password:
-          client = SSHClient(
-            socket,
-            username: config.username,
-            onPasswordRequest: () => config.password ?? '',
-            onVerifyHostKey: config.onVerifyHostKey,
-          );
-          break;
-        case SshAuthMethod.key:
-          final keyPair = SSHKeyPair.fromPem(
-            config.privateKeyPem!,
-            config.passphrase,
-          );
-          client = SSHClient(
-            socket,
-            username: config.username,
-            identities: keyPair,
-            onVerifyHostKey: config.onVerifyHostKey,
-          );
-          break;
-        case SshAuthMethod.agent:
-          final agentClient = await AgentForwardService.connectWithAgent(
-            host: config.host,
-            port: config.port,
-            username: config.username,
-            onVerifyHostKey: config.onVerifyHostKey,
-          );
-          if (agentClient != null) {
-            client = agentClient;
-          } else {
-            throw Exception('No SSH keys found in ~/.ssh/');
-          }
-          break;
+      if (config.proxyConfig == null &&
+          config.authMethod == SshAuthMethod.agent) {
+        final agentClient = await AgentForwardService.connectWithAgent(
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          onVerifyHostKey: config.onVerifyHostKey,
+        );
+        if (agentClient == null) {
+          throw Exception('No SSH keys found in ~/.ssh/');
+        }
+        client = agentClient;
+      } else {
+        client = _buildClient(socket, config);
       }
 
       _client = client;
@@ -165,10 +255,55 @@ class SshService {
     }
   }
 
+  /// Constructs an [SSHClient] on [socket] using [config]'s auth method.
+  /// Shared by the target connection and each ProxyJump hop. SSH agent auth
+  /// is rejected here because it dials its own socket — direct-connection
+  /// agent auth is handled separately in [connect].
+  SSHClient _buildClient(SSHSocket socket, SshConnectionConfig config) {
+    switch (config.authMethod) {
+      case SshAuthMethod.password:
+        return SSHClient(
+          socket,
+          username: config.username,
+          onPasswordRequest: () => config.password ?? '',
+          onVerifyHostKey: config.onVerifyHostKey,
+        );
+      case SshAuthMethod.key:
+        final List<SSHKeyPair> keyPair;
+        try {
+          keyPair = SSHKeyPair.fromPem(
+            config.privateKeyPem!,
+            config.passphrase,
+          );
+        } catch (e) {
+          throw Exception(
+            'Failed to load private key for ${config.host}:${config.port}: '
+            '$e. This usually means the PEM is not a valid OpenSSH private '
+            'key, or the passphrase is wrong or missing. Re-import the key '
+            '(with its passphrase) or use a different auth method for this '
+            'host.',
+          );
+        }
+        return SSHClient(
+          socket,
+          username: config.username,
+          identities: keyPair,
+          onVerifyHostKey: config.onVerifyHostKey,
+        );
+      case SshAuthMethod.agent:
+        throw UnsupportedError(
+          'SSH agent auth is only supported for direct connections, '
+          'not through a jump host',
+        );
+    }
+  }
+
+  @override
   void writeToTerminal(String data) {
     _session?.write(utf8.encode(data));
   }
 
+  @override
   void resizeTerminal(int width, int height) {
     _session?.resizeTerminal(width, height);
   }
@@ -178,13 +313,22 @@ class SshService {
     _stderrSubscription?.cancel();
     _stdoutSubscription = null;
     _stderrSubscription = null;
+    // Tear down forwards before the client — they reference its channels.
+    for (final forward in _activeForwards.values) {
+      forward.stop();
+    }
+    _activeForwards.clear();
+    _pendingForwards.clear();
     _session?.close();
     _client?.close();
+    _jumpClient?.close();
     _client = null;
+    _jumpClient = null;
     _session = null;
     _safeAddConnection(false);
   }
 
+  @override
   void dispose() {
     _disposed = true;
     disconnect();

@@ -6,8 +6,10 @@ import 'package:picshell/models/host.dart';
 import 'package:picshell/models/ssh_key.dart';
 import 'package:picshell/models/session.dart';
 import 'package:picshell/services/host_store.dart';
+import 'package:picshell/services/vault_service.dart';
 import 'package:picshell/providers/host_provider.dart';
 import 'package:picshell/providers/settings_provider.dart';
+import 'package:picshell/providers/vault_provider.dart';
 
 class _FakeHostStore implements HostStore {
   final List<Host> _hosts = [];
@@ -58,7 +60,13 @@ class _FakeHostStore implements HostStore {
   bool get isEncrypting => false;
 
   @override
+  bool get hasUnmarkedSecrets => false;
+
+  @override
   void setPassphrase(String passphrase) {}
+
+  @override
+  Future<void> reEncryptAll(String newPassphrase) async {}
 }
 
 Widget _buildApp(ProviderContainer container) {
@@ -68,10 +76,33 @@ Widget _buildApp(ProviderContainer container) {
   );
 }
 
+/// No-op vault backend for flow tests — PicshellApp now watches the lock
+/// provider, which needs a vault; these tests never unlock, so the backend is
+/// never invoked.
+class _NoopBackend implements VaultBackend {
+  @override
+  Future<bool> get canCheckBiometrics async => false;
+  @override
+  Future<bool> authenticate({String reason = ''}) async => false;
+  @override
+  Future<String?> readKey() async => null;
+  @override
+  Future<void> writeKey(String key) async {}
+  @override
+  Future<void> deleteKey() async {}
+}
+
 ProviderContainer _createContainer() {
+  final hostStore = _FakeHostStore();
+  final vault = VaultService(_NoopBackend());
   return ProviderContainer(overrides: [
-    hostStoreProvider.overrideWithValue(_FakeHostStore()),
-    settingsProvider.overrideWith((ref) => SettingsNotifier(loadFromStorage: false)),
+    hostStoreProvider.overrideWithValue(hostStore),
+    settingsProvider.overrideWith(
+        (ref) => SettingsNotifier(loadFromStorage: false)),
+    vaultServiceProvider.overrideWithValue(vault),
+    appLockProvider.overrideWith(
+      (ref) => AppLockNotifier(vault, hostStore, initiallyLocked: false),
+    ),
   ]);
 }
 

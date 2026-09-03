@@ -79,20 +79,25 @@ void main() {
       expect(par, true);
     });
 
-    test('50% width is encoded as negative (-50)', () async {
+    test('bare N means cells, N% means percent, Npx means pixels', () async {
       final terminal = Terminal(maxLines: 1000);
-      int? w;
-      terminal.onImageDecoded = (bytes, name, width, h, {inline = true, preserveAspectRatio = true}) {
-        w = width;
+      final dims = <(Iterm2Dimension?, Iterm2Dimension?)>[];
+      terminal.onImageDecoded = (bytes, name, width, height, {inline = true, preserveAspectRatio = true}) {
+        dims.add((width, height));
       };
 
       final png = minimalPng();
       final b64 = base64.encode(png);
-      terminal.write('\x1b]1337;File=inline=1;width=50%;size=${png.length}:$b64\x07');
+      terminal.write('\x1b]1337;File=inline=1;width=50%;height=12px;size=${png.length}:$b64\x07');
       await Future.delayed(const Duration(milliseconds: 100));
 
-      // Negative value signals "percent" to the widget layer.
-      expect(w, -50);
+      expect(dims, hasLength(1));
+      final (w, h) = dims.single;
+      // Per the iTerm2 spec, units are preserved for the widget layer.
+      expect(w?.value, 50);
+      expect(w?.unit, Iterm2Unit.percent);
+      expect(h?.value, 12);
+      expect(h?.unit, Iterm2Unit.pixels);
     });
 
     test('name is base64-decoded', () async {

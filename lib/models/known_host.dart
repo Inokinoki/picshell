@@ -3,7 +3,9 @@ import 'package:hive/hive.dart';
 part 'known_host.g.dart';
 
 /// A pinned SSH host key for TOFU (trust-on-first-use) verification.
-@HiveType(typeId: 3)
+/// typeId 6: 0-5 are taken by Host/AuthType/SshKey/Session/ForwardType/
+/// ForwardRule; the old value 3 collided with Session and crashed main().
+@HiveType(typeId: 6)
 class KnownHost extends HiveObject {
   @HiveField(0)
   final String host;
@@ -14,8 +16,9 @@ class KnownHost extends HiveObject {
   @HiveField(2)
   final String keyType;
 
-  /// Hex-encoded fingerprint of the host public key (as given by dartssh2's
-  /// `onVerifyHostKey` callback, currently MD5 of the raw key bytes).
+  /// Canonical fingerprint string, e.g. `SHA256:<base64>` (what dartssh2
+  /// >= 2.22 presents) or `MD5:aa:bb:...` — see
+  /// `canonicalHostKeyFingerprint`.
   @HiveField(3)
   final String fingerprint;
 

@@ -1,9 +1,12 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 import 'package:picshell/models/host.dart';
 import 'package:picshell/models/ssh_key.dart';
 import 'package:picshell/services/host_store.dart';
-import 'dart:io';
+import 'package:picshell/services/secret_cipher.dart';
 
 void main() {
   late HostStore store;
@@ -68,8 +71,9 @@ void main() {
       );
       await store.addHost(host);
 
-      // Read raw from the box — should NOT contain the plaintext password.
-      final rawBox = Hive.box<Host>('hosts');
+      // Read raw from the active generation box — should NOT contain the
+      // plaintext password.
+      final rawBox = Hive.box<Host>(_activeHostsBox());
       final rawHost = rawBox.get('1')!;
       expect(rawHost.password, isNot(equals('secret-password')));
       expect(rawHost.password, isNot(isNull));
@@ -101,7 +105,7 @@ void main() {
       );
       await store.addKey(key);
 
-      final rawBox = Hive.box<SshKey>('ssh_keys');
+      final rawBox = Hive.box<SshKey>(_activeKeysBox());
       final rawKey = rawBox.get('k1')!;
       expect(rawKey.privateKeyPem, isNot(contains('PEM BODY')));
       // getKeys decrypts back.
@@ -121,12 +125,12 @@ void main() {
       );
       await store.addHost(host);
 
-      final rawBox = Hive.box<Host>('hosts');
+      final rawBox = Hive.box<Host>(_activeHostsBox());
       // No encryption → stored as-is.
       expect(rawBox.get('3')?.password, 'plain-password');
     });
 
-    test('decryption falls back gracefully on wrong passphrase', () async {
+    test('wrong passphrase on marked ciphertext yields null password', () async {
       // Write encrypted under one passphrase...
       store.setPassphrase('pass1');
       await store.addHost(Host(
@@ -136,14 +140,467 @@ void main() {
         username: 'root',
         password: 'real-secret',
       ));
-      // ...then read under another. Should not throw; falls back to stored
-      // ciphertext rather than returning null.
+      // ...then read under another. The stored value carries the encryption
+      // marker, so a failed decrypt is unambiguous: the password is reported
+      // as unreadable (null) rather than surfacing the ciphertext as if it
+      // were the plaintext.
       store.setPassphrase('pass2');
       final got = store.getHost('4');
       expect(got, isNotNull);
-      // Decryption failed → fallback is the (still-encrypted) stored value,
-      // which is NOT the plaintext. The important guarantee: no crash, no null.
-      expect(got!.password, isNot(equals('real-secret')));
+      expect(got!.password, isNull);
+    });
+
+    test('unmarked legacy value (never encrypted) passes through', () async {
+      // Simulate a pre-marker install: plaintext written with no cipher.
+      final rawBox = await Hive.openBox<Host>(_activeHostsBox());
+      await rawBox.put('legacy', Host(
+        id: 'legacy',
+        name: 'L',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'plain-old',
+      ));
+      store.setPassphrase('some-key');
+      expect(store.getHost('legacy')?.password, 'plain-old');
+    });
+  });
+
+  group('reEncryptAll', () {
+    test('re-encrypts hosts and keys under a new passphrase', () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'h1',
+        name: 'Host',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'pw-secret',
+      ));
+      await store.addKey(SshKey(
+        id: 'k1',
+        name: 'work',
+        privateKeyPem: '-----BEGIN PRIVATE KEY-----\nBODY\n-----END-----',
+        publicKey: 'ssh-ed25519 AAAA',
+      ));
+
+      // Swap to a different key; everything must still decrypt cleanly.
+      await store.reEncryptAll('key2');
+      expect(store.getHost('h1')?.password, 'pw-secret');
+      expect(store.getKey('k1')?.privateKeyPem, contains('BODY'));
+    });
+
+    test('reEncryptAll to empty passphrase stores plaintext (disable vault)',
+        () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'h2',
+        name: 'Host',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'plain-again',
+      ));
+
+      await store.reEncryptAll('');
+
+      // Raw box now holds the plaintext directly (no encryption).
+      final rawBox = Hive.box<Host>(_activeHostsBox());
+      expect(rawBox.get('h2')?.password, 'plain-again');
+      // And decryption (now a passthrough) still returns it.
+      expect(store.getHost('h2')?.password, 'plain-again');
+    });
+
+    test('reEncryptAll leaves passwordless hosts intact', () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'h3',
+        name: 'NoPw',
+        hostname: '1.2.3.4',
+        username: 'root',
+      ));
+      await store.reEncryptAll('key2');
+      expect(store.getHost('h3')?.password, isNull);
+    });
+
+    test('reEncryptAll hard-fails when the passphrase does not match',
+        () async {
+      store.setPassphrase('right-key');
+      await store.addHost(Host(
+        id: 'hf',
+        name: 'HF',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'precious',
+      ));
+      await store.addKey(SshKey(
+        id: 'khf',
+        name: 'work',
+        privateKeyPem: '-----BEGIN PRIVATE KEY-----\nBODY\n-----END-----',
+        publicKey: 'ssh-ed25519 AAAA',
+      ));
+      final genBefore = _activeGeneration();
+
+      // Simulate the mismatched-key state (e.g. crash between re-encryption
+      // and the settings flip): the released key is wrong.
+      store.setPassphrase('wrong-key');
+      await expectLater(
+        store.reEncryptAll('whatever'),
+        throwsA(isA<StateError>()),
+      );
+
+      // Nothing changed: same generation, no staging leftovers, and the data
+      // still decrypts under the original key.
+      expect(_activeGeneration(), genBefore);
+      expect(await Hive.boxExists('hosts_g${genBefore + 1}'), isFalse);
+      store.setPassphrase('right-key');
+      expect(store.getHost('hf')?.password, 'precious');
+      expect(store.getKey('khf')?.privateKeyPem, contains('BODY'));
+    });
+
+    test('reEncryptAll to empty passphrase also hard-fails on mismatch',
+        () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'hf2',
+        name: 'HF2',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'precious2',
+      ));
+      store.setPassphrase('wrong');
+      await expectLater(store.reEncryptAll(''), throwsA(isA<StateError>()));
+      store.setPassphrase('key1');
+      expect(store.getHost('hf2')?.password, 'precious2');
+    });
+  });
+
+  group('generational reEncryptAll (crash safety)', () {
+    test('flips the generation atomically and cleans the old boxes',
+        () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'g1',
+        name: 'G',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'gen-secret',
+      ));
+      final genBefore = _activeGeneration();
+
+      await store.reEncryptAll('key2');
+
+      final genAfter = _activeGeneration();
+      expect(genAfter, genBefore + 1, reason: 'generation must advance');
+      // Old generation boxes are gone.
+      expect(await Hive.boxExists('hosts_g$genBefore'), isFalse);
+      // Data still decrypts under the new key.
+      expect(store.getHost('g1')?.password, 'gen-secret');
+    });
+
+    test('a new HostStore instance picks up the flipped generation',
+        () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'g2',
+        name: 'G2',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'persisted-secret',
+      ));
+      await store.reEncryptAll('key2');
+
+      // Simulate a restart: a fresh store with the new passphrase released.
+      final reopened = HostStore();
+      await reopened.init();
+      reopened.setPassphrase('key2');
+      expect(reopened.getHost('g2')?.password, 'persisted-secret');
+    });
+
+    test('a partial staging box left by a crashed run is cleared and retried',
+        () async {
+      store.setPassphrase('key1');
+      await store.addHost(Host(
+        id: 'g3',
+        name: 'G3',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'retry-secret',
+      ));
+
+      // Simulate garbage left in the NEXT generation box by an earlier crash
+      // (mid-staging, before the flip).
+      final gen = _activeGeneration();
+      final stale = await Hive.openBox<Host>('hosts_g${gen + 1}');
+      await stale.put('garbage', Host(
+        id: 'garbage',
+        name: 'Garbage',
+        hostname: '0.0.0.0',
+        username: 'x',
+      ));
+
+      await store.reEncryptAll('key2');
+
+      // The retry cleared the garbage and staged only real records.
+      expect(store.getHost('garbage'), isNull);
+      expect(store.getHost('g3')?.password, 'retry-secret');
+      expect(await Hive.boxExists('hosts_g${gen + 2}'), isFalse,
+          reason: 'no stray generation beyond the active one');
+    });
+
+    test('legacy boxes are migrated to generation 1 on init', () async {
+      // Write directly into legacy box names, as an old install would have.
+      final legacy = await Hive.openBox<Host>('hosts');
+      await legacy.put('legacy1', Host(
+        id: 'legacy1',
+        name: 'Legacy',
+        hostname: '5.6.7.8',
+        username: 'root',
+        password: 'legacy-secret',
+      ));
+      // The meta box may exist from the current store; reset it to simulate a
+      // pre-generation install.
+      await Hive.box('vault_meta').delete('generation');
+
+      final fresh = HostStore();
+      await fresh.init();
+      expect(_activeGeneration(), 1);
+      expect(fresh.getHost('legacy1')?.password, 'legacy-secret');
+      // Legacy box consumed.
+      expect(await Hive.boxExists('hosts'), isFalse);
+    });
+
+    test('a legacy install (boxes only, no salt) still migrates the legacy '
+        'salt rather than getting a random one', () async {
+      // Old install with data in the legacy box and no salt, no generation.
+      await Hive.box('vault_meta').delete('generation');
+      await Hive.box('vault_meta').delete('salt');
+      final legacy = await Hive.openBox<Host>('hosts');
+      final legacyCipher =
+          SecretCipher(passphrase: 'old-key', salt: SecretCipher.legacyDeviceSalt());
+      await legacy.put('legacy2', Host(
+        id: 'legacy2',
+        name: 'L2',
+        hostname: '5.6.7.8',
+        username: 'root',
+        password: legacyCipher.encrypt('legacy-salt-data'),
+      ));
+
+      final fresh = HostStore();
+      await fresh.init();
+      expect(base64.decode(Hive.box('vault_meta').get('salt') as String),
+          equals(SecretCipher.legacyDeviceSalt()));
+      fresh.setPassphrase('old-key');
+      expect(fresh.getHost('legacy2')?.password, 'legacy-salt-data');
+    });
+  });
+
+  group('enable crash-window (flag persisted before re-encryption)', () {
+    test('crash after flag-on but before reEncryptAll stays recoverable and '
+        'the retried enable succeeds', () async {
+      // State after the crash: settings.requireBiometric=true was persisted,
+      // the master key 'dev-key' was enrolled in the vault, but reEncryptAll
+      // never ran — the data on disk is still plaintext.
+      await store.addHost(Host(
+        id: 'cw',
+        name: 'CW',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'plain-secret',
+      ));
+
+      // Next launch: flag on -> biometric prompt succeeds -> enrolled key
+      // released to the store. Plaintext passes through the cipher untouched.
+      final relaunched = HostStore();
+      await relaunched.init();
+      relaunched.setPassphrase('dev-key');
+      expect(relaunched.getHost('cw')?.password, 'plain-secret');
+
+      // The user retries enabling: same enrolled key, reEncryptAll succeeds.
+      await relaunched.reEncryptAll('dev-key');
+
+      // The data is now actually encrypted at rest...
+      final raw = Hive.box<Host>('hosts_g${_activeGeneration()}').get('cw')!;
+      expect(raw.password, isNot(equals('plain-secret')));
+      expect(SecretCipher.isEncryptedValue(raw.password!), isTrue);
+
+      // ...and a further restart with the key released still decrypts.
+      final third = HostStore();
+      await third.init();
+      third.setPassphrase('dev-key');
+      expect(third.getHost('cw')?.password, 'plain-secret');
+    });
+
+    test('crash after a completed enable stays recoverable on relaunch',
+        () async {
+      // Full successful enable: key enrolled, flag on, data re-encrypted.
+      await store.reEncryptAll('dev-key');
+      final relaunched = HostStore();
+      await relaunched.init();
+      relaunched.setPassphrase('dev-key');
+      final host = Host(
+        id: 'post',
+        name: 'P',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'post-enable-secret',
+      );
+      await relaunched.addHost(host);
+      expect(relaunched.getHost('post')?.password, 'post-enable-secret');
+
+      final third = HostStore();
+      await third.init();
+      third.setPassphrase('dev-key');
+      expect(third.getHost('post')?.password, 'post-enable-secret');
+    });
+  });
+
+  group('KDF salt persistence (vault_meta)', () {
+    test('init persists a 16-byte salt and reuses it across restarts',
+        () async {
+      final meta = Hive.box('vault_meta');
+      final persisted = meta.get('salt') as String?;
+      expect(persisted, isNotNull, reason: 'init must persist the salt');
+      final bytes = base64.decode(persisted!);
+      expect(bytes.length, 16);
+
+      // "Restart": a fresh store must reuse the persisted salt, not derive a
+      // new one — this is what keeps data stable across hostname/core-count
+      // changes.
+      final saltBefore = persisted;
+      final reopened = HostStore();
+      await reopened.init();
+      expect(Hive.box('vault_meta').get('salt'), saltBefore);
+
+      // And records written before the restart still decrypt.
+      reopened.setPassphrase('k1');
+      await reopened.addHost(Host(
+        id: 'salt1',
+        name: 'S',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'salted-secret',
+      ));
+      final again = HostStore();
+      await again.init();
+      again.setPassphrase('k1');
+      expect(again.getHost('salt1')?.password, 'salted-secret');
+    });
+
+    test('fresh install gets a random salt, not the device-derived one',
+        () async {
+      // This store's setUp ran against an empty Hive dir = fresh install.
+      final persisted = Hive.box('vault_meta').get('salt') as String;
+      expect(base64.decode(persisted).length, 16);
+      expect(
+        base64.decode(persisted),
+        isNot(equals(SecretCipher.legacyDeviceSalt())),
+        reason: 'a fresh install must never inherit the property-derived '
+            'salt — it exists only to migrate existing encrypted data',
+      );
+
+      // A record written by the fresh install still decrypts after restart.
+      store.setPassphrase('fresh-key');
+      await store.addHost(Host(
+        id: 'fresh1',
+        name: 'F',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'fresh-secret',
+      ));
+      final reopened = HostStore();
+      await reopened.init();
+      reopened.setPassphrase('fresh-key');
+      expect(reopened.getHost('fresh1')?.password, 'fresh-secret');
+    });
+
+    test('an existing install with data but no salt migrates the legacy salt',
+        () async {
+      // The setUp store already created g1 boxes (an "existing install");
+      // delete only the salt to simulate a pre-persisted-salt version.
+      await Hive.box('vault_meta').delete('salt');
+      final legacyCipher =
+          SecretCipher(passphrase: 'old-key', salt: SecretCipher.legacyDeviceSalt());
+      final rawBox = await Hive.openBox<Host>(_activeHostsBox());
+      await rawBox.put('pre2', Host(
+        id: 'pre2',
+        name: 'Pre2',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: legacyCipher.encrypt('legacy-kept'),
+      ));
+
+      final migrated = HostStore();
+      await migrated.init();
+      expect(base64.decode(Hive.box('vault_meta').get('salt') as String),
+          equals(SecretCipher.legacyDeviceSalt()));
+      migrated.setPassphrase('old-key');
+      expect(migrated.getHost('pre2')?.password, 'legacy-kept');
+    });
+
+    test('first init migrates the legacy property-derived salt once', () async {
+      // Simulate an old install: records were encrypted under the legacy
+      // (property-derived) salt and vault_meta has no persisted salt yet.
+      await Hive.box('vault_meta').delete('salt');
+      final legacyCipher =
+          SecretCipher(passphrase: 'old-key', salt: SecretCipher.legacyDeviceSalt());
+      final rawBox = await Hive.openBox<Host>(_activeHostsBox());
+      await rawBox.put('pre', Host(
+        id: 'pre',
+        name: 'Pre',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: legacyCipher.encrypt('pre-migration-secret'),
+      ));
+
+      final migrated = HostStore();
+      await migrated.init();
+      expect(
+        base64.decode(Hive.box('vault_meta').get('salt') as String),
+        equals(SecretCipher.legacyDeviceSalt()),
+        reason: 'the legacy salt must be re-derived and persisted as-is so '
+            'existing encrypted data stays readable',
+      );
+
+      migrated.setPassphrase('old-key');
+      expect(migrated.getHost('pre')?.password, 'pre-migration-secret');
+
+      // The salt is now persisted: later inits reuse it verbatim.
+      final again = HostStore();
+      await again.init();
+      again.setPassphrase('old-key');
+      expect(again.getHost('pre')?.password, 'pre-migration-secret');
+    });
+
+    test('a persisted salt wins over device properties (hostname change)',
+        () async {
+      // Pre-seed a salt that differs from anything the device would derive.
+      final custom = SecretCipher.randomSalt(16);
+      await Hive.box('vault_meta').put('salt', base64.encode(custom));
+
+      final store = HostStore();
+      await store.init();
+      store.setPassphrase('k');
+      await store.addHost(Host(
+        id: 'stable',
+        name: 'Stable',
+        hostname: '1.2.3.4',
+        username: 'root',
+        password: 'still-readable',
+      ));
+
+      // Even if the platform properties change (simulated by the seeded salt
+      // differing from legacyDeviceSalt), the persisted salt is what counts.
+      expect(custom, isNot(equals(SecretCipher.legacyDeviceSalt())));
+      final reopened = HostStore();
+      await reopened.init();
+      reopened.setPassphrase('k');
+      expect(reopened.getHost('stable')?.password, 'still-readable');
     });
   });
 }
+
+/// The active host-record generation, per the vault_meta marker.
+int _activeGeneration() =>
+    Hive.box('vault_meta').get('generation', defaultValue: 1) as int;
+
+String _activeHostsBox() => 'hosts_g${_activeGeneration()}';
+
+String _activeKeysBox() => 'ssh_keys_g${_activeGeneration()}';

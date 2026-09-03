@@ -18,7 +18,7 @@ void main() {
       final oscData = 'File=inline=1;size=${pngBytes.length}:$base64Data';
 
       final received = <Map<String, dynamic>>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add({'bytes': bytes, 'name': name, 'w': w, 'h': h});
       };
 
@@ -42,7 +42,7 @@ void main() {
       final oscData = 'File=inline=1:$base64Data';
 
       final received = <String>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add(name);
       };
 
@@ -55,23 +55,24 @@ void main() {
       final pngBytes = _createMinimalPng();
       final base64Data = base64.encode(pngBytes);
 
-      final oscData = 'File=inline=1;width=200px;height=100px:${base64Data}';
+      final oscData = 'File=inline=1;width=200px;height=100px:$base64Data';
 
       final received = <Map<String, dynamic>>[];
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         received.add({'w': w, 'h': h});
       };
 
       terminal.unknownOSC('1337', [oscData]);
 
       expect(received.length, 1);
-      expect(received[0]['w'], 200);
-      expect(received[0]['h'], 100);
+      // Explicit px suffix parses as a pixel-unit dimension.
+      expect(received[0]['w'], const Iterm2Dimension(200, Iterm2Unit.pixels));
+      expect(received[0]['h'], const Iterm2Dimension(100, Iterm2Unit.pixels));
     });
 
     test('should ignore non-1337 OSC sequences', () {
       var called = false;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         called = true;
       };
 
@@ -86,7 +87,7 @@ void main() {
       final base64Data = base64.encode(pngBytes);
 
       Uint8List? receivedBytes;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         receivedBytes = bytes;
       };
 
@@ -99,7 +100,7 @@ void main() {
 
     test('should not fire callback for invalid base64', () {
       var called = false;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         called = true;
       };
 
@@ -110,7 +111,7 @@ void main() {
 
     test('should not fire callback for missing File= prefix', () {
       var called = false;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? h, int? w, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, h, w, {inline = true, preserveAspectRatio = true}) {
         called = true;
       };
 
@@ -129,16 +130,17 @@ void main() {
       );
     });
 
-    test('should handle empty payload after colon', () {
+    test('should drop empty payload after colon', () {
       Uint8List? receivedBytes;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         receivedBytes = bytes;
       };
 
       terminal.unknownOSC('1337', ['File=inline=1:']);
 
-      expect(receivedBytes, isNotNull);
-      expect(receivedBytes!.length, 0);
+      // An empty image produces a blank floating window, so the terminal
+      // must not emit it.
+      expect(receivedBytes, isNull);
     });
 
     test('should parse name parameter correctly', () {
@@ -146,7 +148,7 @@ void main() {
       final base64Data = base64.encode(pngBytes);
 
       String? receivedName;
-      terminal.onImageDecoded = (Uint8List bytes, String name, int? w, int? h, {inline = true, preserveAspectRatio = true}) {
+      terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {
         receivedName = name;
       };
 

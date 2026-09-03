@@ -212,4 +212,16 @@ abstract class EscapeHandler {
   void setIconName(String name);
 
   void unknownOSC(String code, List<String> args);
+
+  /* APC / DCS */
+
+  /// Application Program Command (`ESC _ ... ST`). picshell uses this for the
+  /// Kitty graphics protocol. The [data] is the full payload after `ESC _`
+  /// (e.g. `G...` for Kitty). Empty default; override to handle.
+  void apc(String data) {}
+
+  /// Device Control String (`ESC P ... ST`). picshell uses this for the Sixel
+  /// graphics protocol. [intermediates] is the leading command prefix (params
+  /// + final byte, e.g. `q` for Sixel); [data] is the body. Empty default.
+  void dcs(String intermediates, String data) {}
 }
