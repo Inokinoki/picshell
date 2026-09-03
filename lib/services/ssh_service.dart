@@ -103,8 +103,11 @@ class SshService implements SshTransport {
   final Map<String, ActiveForward> _activeForwards = {};
   bool _disposed = false;
 
+  @override
   Stream<String> get output => _outputController.stream;
+  @override
   Stream<bool> get connectionState => _connectionController.stream;
+  @override
   bool get isConnected => _client != null && _session != null;
 
   /// The live SSH client, or null when not connected. Exposed so the session
@@ -122,6 +125,7 @@ class SshService implements SshTransport {
   /// Throws if the client is not connected or the rule is already running.
   /// Concurrent calls for the same rule id are single-flighted: both await
   /// the same bind and get the same port instead of racing to bind twice.
+  @override
   Future<int> startForward(ForwardRule rule) async {
     final client = _client;
     if (client == null) {
@@ -147,6 +151,7 @@ class SshService implements SshTransport {
   final Map<String, Future<ActiveForward>> _pendingForwards = {};
 
   /// Stops a running forward by its rule id. No-op if not running.
+  @override
   Future<void> stopForward(String ruleId) async {
     final forward = _activeForwards.remove(ruleId);
     if (forward != null) await forward.stop();
@@ -171,6 +176,7 @@ class SshService implements SshTransport {
     }
   }
 
+  @override
   Future<void> connect(SshConnectionConfig config) async {
     try {
       // No initial `false` emission here: openSession subscribes to
@@ -292,10 +298,12 @@ class SshService implements SshTransport {
     }
   }
 
+  @override
   void writeToTerminal(String data) {
     _session?.write(utf8.encode(data));
   }
 
+  @override
   void resizeTerminal(int width, int height) {
     _session?.resizeTerminal(width, height);
   }
@@ -320,6 +328,7 @@ class SshService implements SshTransport {
     _safeAddConnection(false);
   }
 
+  @override
   void dispose() {
     _disposed = true;
     disconnect();

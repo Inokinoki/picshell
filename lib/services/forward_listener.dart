@@ -213,7 +213,6 @@ class _SocksConn {
   final List<int> _buf = [];
   Completer<void>? _fill;
   bool _closed = false;
-  bool _halfClosed = false;
   late final StreamSubscription<Uint8List> _sub;
   SSHForwardChannel? _channel;
   final Completer<void> _done = Completer<void>();
@@ -245,7 +244,6 @@ class _SocksConn {
       // in _attach). Mid-handshake FIN (no channel yet) is a full close.
       onDone: () {
         if (_channel != null && !_closed) {
-          _halfClosed = true;
           try {
             _channel!.sink.close();
           } catch (_) {

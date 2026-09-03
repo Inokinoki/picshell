@@ -92,11 +92,11 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
 
   /// When false, setters update state only — used by widget tests, where
   /// real Hive file IO inside a fake-async zone never completes.
-  final bool _persist;
+  late final bool _persist;
 
   SettingsNotifier({bool loadFromStorage = true, bool persist = true})
-      : _persist = persist,
-        super(const AppSettings()) {
+      : super(const AppSettings()) {
+    _persist = persist;
     if (loadFromStorage) _load();
   }
 
@@ -104,7 +104,7 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     final box = await Hive.openBox(_boxName);
     // Corrupted Hive values must not throw (or silently abort the rest of
     // the load): fall back to defaults on any type mismatch.
-    T _enum<T extends Enum>(String key, List<T> values, T fallback) {
+    T readEnum<T extends Enum>(String key, List<T> values, T fallback) {
       final raw = box.get(key);
       if (raw is int) {
         return values[raw.clamp(0, values.length - 1)];
@@ -136,13 +136,13 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     }
 
     final loaded = AppSettings(
-      keyboardBarMode: _enum(
+      keyboardBarMode: readEnum(
         _keyboardModeKey,
         KeyboardBarMode.values,
         KeyboardBarMode.auto,
       ),
-      themeMode: _enum(_themeModeKey, ThemeMode.values, ThemeMode.system),
-      palette: _enum(
+      themeMode: readEnum(_themeModeKey, ThemeMode.values, ThemeMode.system),
+      palette: readEnum(
         _paletteKey,
         TerminalPalette.values,
         TerminalPalette.defaultTheme,

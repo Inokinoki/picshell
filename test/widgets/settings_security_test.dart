@@ -114,7 +114,7 @@ class _FakeHostStore implements HostStore {
 
 void main() {
   Future<(WidgetTester, _RecordingBackend, _FakeHostStore, ProviderContainer)>
-      _pump(WidgetTester tester, {bool startEnabled = false}) async {
+      pumpHelper(WidgetTester tester, {bool startEnabled = false}) async {
     final backend = _RecordingBackend();
     final vault = VaultService(backend);
     final hostStore = _FakeHostStore();
@@ -147,7 +147,7 @@ void main() {
   group('vault toggle auth gate', () {
     testWidgets('enable prompts for verification and aborts on failure',
         (tester) async {
-      final (_, backend, hostStore, container) = await _pump(tester);
+      final (_, backend, hostStore, container) = await pumpHelper(tester);
       backend.authResult = false;
 
       await tester.tap(find.descendant(
@@ -168,7 +168,7 @@ void main() {
     });
 
     testWidgets('enable proceeds after successful verification', (tester) async {
-      final (_, backend, hostStore, container) = await _pump(tester);
+      final (_, backend, hostStore, container) = await pumpHelper(tester);
 
       await tester.tap(find.descendant(
         of: find.ancestor(
@@ -189,7 +189,7 @@ void main() {
 
     testWidgets('disable prompts for verification and aborts on failure',
         (tester) async {
-      final (_, backend, hostStore, container) = await _pump(tester, startEnabled: true);
+      final (_, backend, hostStore, container) = await pumpHelper(tester, startEnabled: true);
       await tester.pump();
       backend.authResult = false;
 
@@ -211,8 +211,8 @@ void main() {
 
     testWidgets('disable proceeds after successful verification',
         (tester) async {
-      final (_, backend, hostStore, container) = await _pump(tester, startEnabled: true);
-      // (enabled via _pump's runAsync above)
+      final (_, backend, hostStore, container) = await pumpHelper(tester, startEnabled: true);
+      // (enabled via pumpHelper's runAsync above)
 
       await tester.tap(find.descendant(
         of: find.ancestor(
@@ -233,7 +233,7 @@ void main() {
   group('crash-safe enable ordering and error feedback', () {
     testWidgets('enable persists requireBiometric BEFORE re-encrypting',
         (tester) async {
-      final (_, backend, hostStore, container) = await _pump(tester);
+      final (_, backend, hostStore, container) = await pumpHelper(tester);
       hostStore.probeRequireBiometric =
           () => container.read(settingsProvider).requireBiometric;
 
@@ -256,7 +256,7 @@ void main() {
 
     testWidgets('enable failure rolls the flag back and shows an error snackbar',
         (tester) async {
-      final (_, backend, hostStore, container) = await _pump(tester);
+      final (_, backend, hostStore, container) = await pumpHelper(tester);
       hostStore.reEncryptError =
           StateError('reEncryptAll aborted: 1 record(s) failed to decrypt');
 
@@ -280,7 +280,7 @@ void main() {
     testWidgets('disable failure keeps the flag, keeps the key, and shows an '
         'error snackbar', (tester) async {
       final (_, backend, hostStore, container) =
-          await _pump(tester, startEnabled: true);
+          await pumpHelper(tester, startEnabled: true);
       hostStore.reEncryptError = StateError('boom');
 
       await tester.tap(find.descendant(

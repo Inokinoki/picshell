@@ -356,7 +356,7 @@ void main() {
   group('SFTP', () {
     // Opens a session and returns the connected SftpService built on it.
     // Shared by the list/download smoke tests so each doesn't re-handshake.
-    Future<SftpService> _connectSession(
+    Future<SftpService> connectSessionHelper(
       WidgetTester tester,
       ProviderContainer container,
     ) async {
@@ -391,7 +391,7 @@ void main() {
       ));
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
-      final sftp = await _connectSession(tester, container);
+      final sftp = await connectSessionHelper(tester, container);
       final entries = await sftp.listdir('/');
 
       expect(entries, isNotEmpty, reason: 'root listing should not be empty');
@@ -413,7 +413,7 @@ void main() {
       ));
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
-      final sftp = await _connectSession(tester, container);
+      final sftp = await connectSessionHelper(tester, container);
       final tmp = await Directory.systemTemp.createTemp('picshell_sftp_');
       final localPath = '${tmp.path}/marker.txt';
       await sftp.download('/picshell_sftp_marker.txt', localPath);

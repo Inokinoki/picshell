@@ -215,7 +215,7 @@ class _HostEditScreenState extends ConsumerState<HostEditScreen> {
                   labelText: 'Connect via (ProxyJump, ssh -J)',
                   border: OutlineInputBorder(),
                 ),
-                value: effectiveProxyHostId,
+                initialValue: effectiveProxyHostId,
                   items: [
                     const DropdownMenuItem<String?>(
                       value: null,
@@ -526,7 +526,7 @@ class _ForwardEditorDialogState extends State<_ForwardEditorDialog> {
           children: [
             DropdownButtonFormField<ForwardType>(
               decoration: const InputDecoration(labelText: 'Type'),
-              value: _type,
+              initialValue: _type,
               items: const [
                 DropdownMenuItem(
                   value: ForwardType.local,

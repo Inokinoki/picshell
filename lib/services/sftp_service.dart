@@ -161,6 +161,7 @@ class SftpService implements SftpBrowserBackend {
   }
 
   /// Lists [path], returning UI-friendly [SftpEntry]s sorted directories-first.
+  @override
   Future<List<SftpEntry>> listdir(String path) async {
     final sftp = await _client();
     final names = await sftp.listdir(path);
@@ -187,12 +188,14 @@ class SftpService implements SftpBrowserBackend {
   }
 
   /// Canonicalises [path] to an absolute form via the SFTP realpath op.
+  @override
   Future<String> absolute(String path) async {
     final sftp = await _client();
     return sftp.absolute(path);
   }
 
   /// Downloads [remotePath] to [localPath], streaming with a progress callback.
+  @override
   Future<void> download(
     String remotePath,
     String localPath, {
@@ -224,6 +227,7 @@ class SftpService implements SftpBrowserBackend {
 
   /// Returns whether [path] exists on the remote, without throwing on
   /// "no such file".
+  @override
   Future<bool> exists(String path) async {
     final sftp = await _client();
     try {
@@ -238,6 +242,7 @@ class SftpService implements SftpBrowserBackend {
   /// Uploads [localPath] to [remotePath], streaming with progress callbacks.
   /// [onStart] fires once with the total byte count before the first chunk,
   /// so callers can show a determinate progress bar.
+  @override
   Future<void> upload(
     String localPath,
     String remotePath, {
@@ -291,13 +296,18 @@ class SftpService implements SftpBrowserBackend {
     }
   }
 
+  @override
   Future<void> mkdir(String path) async => (await _client()).mkdir(path);
+  @override
   Future<void> rmdir(String path) async => (await _client()).rmdir(path);
+  @override
   Future<void> remove(String path) async => (await _client()).remove(path);
+  @override
   Future<void> rename(String oldPath, String newPath) async =>
       (await _client()).rename(oldPath, newPath);
 
   /// Closes the SFTP subsystem. Does NOT close the underlying SSH session.
+  @override
   Future<void> close() async {
     _sftp?.close();
     _sftp = null;

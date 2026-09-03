@@ -66,7 +66,7 @@ void main() {
     await Hive.deleteFromDisk();
   });
 
-  Future<void> _requireBiometric(bool v) => settingsBox.put('requireBiometric', v);
+  Future<void> requireBiometricFake(bool v) => settingsBox.put('requireBiometric', v);
 
   test('no requirement: unlocked, no prompt, no key release', () async {
     final backend = _FakeBackend()..storedKey = 'enrolled-key';
@@ -79,7 +79,7 @@ void main() {
   });
 
   test('required + available + success: key released, not bypassed', () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     final backend = _FakeBackend()
       ..storedKey = 'enrolled-key'
       ..authResult = true;
@@ -92,7 +92,7 @@ void main() {
   });
 
   test('required + available + cancel: starts locked', () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     final backend = _FakeBackend()..authResult = false;
     final result = await performLaunchUnlock(
         settingsBox: settingsBox, hostStore: hostStore, vault: VaultService(backend));
@@ -103,7 +103,7 @@ void main() {
 
   test('required + biometrics unavailable + passcode fallback succeeds: '
       'verified, not bypassed, key released', () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     final backend = _FakeBackend()
       ..canAuth = false
       ..storedKey = 'enrolled-key'
@@ -120,7 +120,7 @@ void main() {
 
   test('required + unavailable + user cancels passcode fallback: locked, '
       'NOT bypassed (no key release)', () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     final backend = _FakeBackend()
       ..canAuth = false
       ..storedKey = 'enrolled-key'
@@ -137,7 +137,7 @@ void main() {
 
   test('required + available + authenticate THROWS: app launches locked, key '
       'not released, no bypass', () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     final backend = _FakeBackend()
       ..storedKey = 'enrolled-key'
       ..authThrows = true;
@@ -153,7 +153,7 @@ void main() {
 
   test('required + unavailable + authenticate throws: recovery + bypass flag',
       () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     final backend = _FakeBackend()
       ..canAuth = false
       ..storedKey = 'enrolled-key'
@@ -167,7 +167,7 @@ void main() {
 
   test('interrupted enable: plaintext secrets detected after a VERIFIED '
       'launch are re-encrypted automatically', () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     // Simulate the crash state: flag on, key enrolled, data still plaintext.
     await hostStore.addKey(SshKey(
         id: 'k1', name: 'key', privateKeyPem: 'SECRET PEM', publicKey: 'pub'));
@@ -198,7 +198,7 @@ void main() {
   });
 
   test('interrupted enable: repair failure is reported, not swallowed', () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     // Plaintext secret (triggers the repair) plus a corrupt marked record
     // (makes reEncryptAll hard-fail).
     await hostStore.addHost(Host(
@@ -230,7 +230,7 @@ void main() {
 
   test('no interrupted enable: verified launch does not touch the boxes',
       () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     await hostStore.addHost(Host(
         id: 'h1',
         name: 'h',
@@ -254,7 +254,7 @@ void main() {
 
   test('required + unavailable + no key ever enrolled: bypass flagged, '
       'cipher untouched', () async {
-    await _requireBiometric(true);
+    await requireBiometricFake(true);
     final backend = _FakeBackend()
       ..canAuth = false
       ..storedKey = null

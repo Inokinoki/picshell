@@ -37,8 +37,8 @@ class SecretCipher {
   static const v2Marker = 'enc.v2.';
 
   final Uint8List _salt;
-  final String _passphrase;
-  final int _iterations;
+  late final String _passphrase;
+  late final int _iterations;
 
   /// Cached derived key (AES-256 = 32 bytes). Lazily computed once.
   Uint8List? _key;
@@ -47,11 +47,12 @@ class SecretCipher {
     required String passphrase,
     Uint8List? salt,
     int iterations = 10000,
-  })  : _passphrase = passphrase,
-        _salt = (salt != null && salt.isNotEmpty)
+  })  : _salt = (salt != null && salt.isNotEmpty)
             ? salt
-            : _randomSalt(16),
-        _iterations = iterations;
+            : _randomSalt(16) {
+    _passphrase = passphrase;
+    _iterations = iterations;
+  }
 
   /// The salt this cipher derives its key from.
   Uint8List get salt => _salt;

@@ -55,7 +55,7 @@ void main() {
       final pngBytes = _createMinimalPng();
       final base64Data = base64.encode(pngBytes);
 
-      final oscData = 'File=inline=1;width=200px;height=100px:${base64Data}';
+      final oscData = 'File=inline=1;width=200px;height=100px:$base64Data';
 
       final received = <Map<String, dynamic>>[];
       terminal.onImageDecoded = (bytes, name, w, h, {inline = true, preserveAspectRatio = true}) {

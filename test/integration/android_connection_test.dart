@@ -6,7 +6,6 @@ import 'package:hive/hive.dart';
 import 'package:picshell/models/host.dart';
 import 'package:picshell/models/known_host.dart';
 import 'package:picshell/providers/session_provider.dart';
-import 'package:picshell/services/host_store.dart';
 import 'package:picshell/services/known_hosts_store.dart';
 import 'package:picshell/services/ssh_service.dart';
 

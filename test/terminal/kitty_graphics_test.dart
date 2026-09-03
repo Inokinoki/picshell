@@ -125,7 +125,7 @@ void main() {
     test('non-transmit action (a=d) with payload emits nothing', () {
       // A hostile delete/delete-range chunk carrying a payload must not be
       // emitted as a phantom image.
-      terminal.write('\x1b_Ga=d,f=100;${_png1x1B64}$_st');
+      terminal.write('\x1b_Ga=d,f=100;$_png1x1B64$_st');
       expect(received.length, 0);
       terminal.write('\x1b_Ga=T,f=100;i=9,m=1;AAAA$_st'); // still healthy
       terminal.write(
@@ -152,7 +152,7 @@ void main() {
       for (var i = 0; i < (10 * 1024 * 1024) ~/ chunkSize; i++) {
         terminal.write('\x1b_Ga=T,f=100,m=1;$chunk');
       }
-      terminal.write('$_st');
+      terminal.write(_st);
       terminal.write('done');
       final text = terminal.buffer.getText();
       expect(text, contains('done'));
@@ -180,7 +180,7 @@ void main() {
       for (var i = 0; i < (10 * 1024 * 1024) ~/ chunkSize; i++) {
         terminal.write('\x1b]0;$chunk');
       }
-      terminal.write('$_st');
+      terminal.write(_st);
       terminal.write('done');
       final text = terminal.buffer.getText();
       expect(text, contains('done'));
