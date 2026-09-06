@@ -305,6 +305,20 @@ jobs:
           sudo sed -i '' 's/^#\{0,1\}PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           grep -q '^PasswordAuthentication yes' /etc/ssh/sshd_config || \
             echo 'PasswordAuthentication yes' | sudo tee -a /etc/ssh/sshd_config >/dev/null
+          # sysadminctl-created users have no Kerberos principal, and pam_krb5
+          # failing to determine one ABORTS the whole PAM authentication
+          # (sshd closes the connection preauth; confirmed in the unified
+          # log: "pam_sm_authenticate(): Failed to determine Kerberos
+          # principal name"). Mark it optional — pam_opendirectory still
+          # verifies the password itself.
+          sudo grep -n pam_krb5 /etc/pam.d/sshd || true
+          # BSD sed has no alternation, hence perl. The leading `.*` on the
+          # match drops pam_krb5's own args (use_kcminit etc.) — fine for a
+          # module whose result we no longer care about.
+          sudo perl -pi -e \
+            's/^auth\s+(?:required|sufficient|requisite)\s+pam_krb5\.so\b.*/auth\toptional\tpam_krb5.so/' \
+            /etc/pam.d/sshd
+          sudo grep -n pam_krb5 /etc/pam.d/sshd || true
           sudo launchctl enable system/com.openssh.sshd || true
           sudo launchctl kickstart -k system/com.openssh.sshd || true
           for i in $(seq 1 30); do
