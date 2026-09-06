@@ -276,7 +276,11 @@ jobs:
       - name: Enable sshd and create test fixtures
         run: |
           sudo systemsetup -f -setremotelogin on
-          sudo sysadminctl -addUser testuser -fullName "Picshell Test" -password testpass
+          # Keep -password immediately after -addUser: sysadminctl's argument
+          # parsing is picky about interleaved flags, and a silently unset
+          # password kills the whole test suite at SSH auth.
+          sudo sysadminctl -addUser testuser -password testpass
+          sudo dscl . -create /Users/testuser UserShell /bin/bash
           sudo createhomedir -c -u testuser >/dev/null 2>&1 || true
           # SFTP marker, as in Dockerfile.sshd. The runner's system volume is
           # sealed (read-only root), so the marker lives in /private/tmp and
@@ -299,6 +303,28 @@ jobs:
             if nc -z localhost 22; then echo "sshd up"; break; fi
             sleep 1
           done
+
+          # Smoke-test the password login BEFORE the minutes-long test suite,
+          # and on failure dump sshd's effective config and its own logs so
+          # the root cause is visible from the run output alone.
+          sudo sshd -T 2>/dev/null | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|usepam|authenticationmethods)'
+          out=$(expect -c '
+            set timeout 30
+            spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                     -o PubkeyAuthentication=no -o PreferredAuthentications=password \
+                     -p 22 testuser@127.0.0.1 echo ssh-login-ok
+            expect {
+              -re "(?i)password:" { send "testpass\r"; exp_continue }
+              eof
+            }
+          ')
+          echo "$out"
+          echo "$out" | grep -q ssh-login-ok || {
+            echo "::error::password SSH login failed; recent sshd logs follow"
+            sudo log show --last 5m --info \
+              --predicate 'process CONTAINS "sshd"' --style compact | tail -80
+            exit 1
+          }
 
       - name: Run macOS integration tests
         # One file per invocation — see the Linux job note.
