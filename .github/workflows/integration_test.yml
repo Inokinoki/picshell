@@ -90,11 +90,13 @@ jobs:
       - run: flutter pub get
 
       # Toolchain required to build the Flutter Linux desktop runner.
+      # libsecret-1/libjsoncpp are demanded by flutter_secure_storage_linux's
+      # CMake pkg-config check, on top of the base GTK toolchain.
       - name: Install Linux desktop build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config \
-            libgtk-3-dev liblzma-dev
+            libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev
 
       - run: flutter config --enable-linux-desktop
 
@@ -161,10 +163,30 @@ jobs:
             -Force | Out-Null
           # Mirror Dockerfile.sshd: explicit password auth and the relaxed
           # MaxStartups that tolerates the tests' burst of connections.
-          Add-Content "C:\ProgramData\ssh\sshd_config" "PasswordAuthentication yes"
-          Add-Content "C:\ProgramData\ssh\sshd_config" "MaxStartups 50:30:100"
+          # The stock config ENDS with a `Match Group administrators` block;
+          # appending directives after it lands them inside the Match scope
+          # and sshd aborts at startup ("Directive ... is not allowed within
+          # a Match block"). So strip any existing copies and PREPEND.
+          $cfg = "C:\ProgramData\ssh\sshd_config"
+          $kept = Get-Content $cfg |
+            Where-Object { $_ -notmatch '^\s*#?\s*(PasswordAuthentication|MaxStartups)\b' }
+          $directives = @('PasswordAuthentication yes', 'MaxStartups 50:30:100')
+          Set-Content -Path $cfg -Value ($directives + $kept)
+
           Set-Service sshd -StartupType Automatic
-          Restart-Service sshd
+          if ((Get-Service sshd).Status -eq 'Running') {
+            Restart-Service sshd
+          } else {
+            # Fresh capability installs occasionally need a moment before the
+            # service will start; retry instead of failing on the first try.
+            $started = $false
+            for ($i = 0; $i -lt 5; $i++) {
+              Start-Service sshd -ErrorAction SilentlyContinue
+              if ((Get-Service sshd).Status -eq 'Running') { $started = $true; break }
+              Start-Sleep -Seconds 2
+            }
+            if (-not $started) { throw "sshd failed to start" }
+          }
           # Password-protect the built-in admin account the tests log in as
           # (its profile already exists on the image).
           $pw = ConvertTo-SecureString 'testpass' -AsPlainText -Force
@@ -232,13 +254,15 @@ jobs:
       - run: flutter pub get
 
       # Native sshd (Remote Login) stands in for the throwaway sshd container
-      # — macOS runners have no Docker. The image's runner user is
-      # password-protected for the tests (its profile already exists), and
-      # the Dockerfile.sshd fixtures are recreated natively.
+      # — macOS runners have no Docker. The image's managed `runner` account
+      # cannot have its password reset (dscl -passwd fails with eDSAuthFailed),
+      # so a dedicated password-login user is created for the tests, and the
+      # Dockerfile.sshd fixtures are recreated natively.
       - name: Enable sshd and create test fixtures
         run: |
           sudo systemsetup -f -setremotelogin on
-          sudo dscl . -passwd /Users/runner testpass
+          sudo sysadminctl -addUser testuser -fullName "Picshell Test" -password testpass
+          sudo createhomedir -c -u testuser >/dev/null 2>&1 || true
           # SFTP marker at the filesystem root, as in Dockerfile.sshd.
           echo 'picshell-sftp-smoke' | sudo tee /picshell_sftp_marker.txt >/dev/null
           # OSC 1337 emitter, same as Dockerfile.sshd's /tmp/send.sh.
@@ -264,7 +288,7 @@ jobs:
           flutter test integration_test/ -d mac
           --dart-define=TEST_SSH_HOST=127.0.0.1
           --dart-define=TEST_SSH_PORT=22
-          --dart-define=TEST_SSH_USER=runner
+          --dart-define=TEST_SSH_USER=testuser
           --dart-define=TEST_SSH_PASS=testpass
 
       - name: Upload test screenshots
