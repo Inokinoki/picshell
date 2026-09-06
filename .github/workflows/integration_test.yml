@@ -204,9 +204,11 @@ jobs:
       - name: Create sshd fixtures
         shell: pwsh
         run: |
-          # Win32-OpenSSH's SFTP root is the drive root, so the marker file
-          # lives at C:\ (the tests list and download /picshell_sftp_marker.txt).
-          [IO.File]::WriteAllText('C:\picshell_sftp_marker.txt', "picshell-sftp-smoke`n")
+          # Win32-OpenSSH's SFTP didn't list a marker written to C:\ as '/', so
+          # keep it in the login user's home (whose absolute DOS-style path the
+          # sftp server accepts directly) and point TEST_SSH_SFTP_DIR at it.
+          $home_ = "C:\Users\runneradmin"
+          [IO.File]::WriteAllText("$home_\picshell_sftp_marker.txt", "picshell-sftp-smoke`n")
           # OSC 1337 emitter, same as Dockerfile.sshd's /tmp/send.sh. Git Bash
           # maps /tmp to runneradmin's %TEMP%; bash rejects CRLF, so write
           # with LF endings.
@@ -215,7 +217,7 @@ jobs:
           B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
           printf "\033]1337;File=inline=1;name=dC5wbmc=;width=80;height=40:%s\a\n" "$B64"
           '@ -replace "`r`n", "`n"
-          [IO.File]::WriteAllText("$env:SystemDrive\Users\runneradmin\AppData\Local\Temp\send.sh", $send)
+          [IO.File]::WriteAllText("$home_\AppData\Local\Temp\send.sh", $send)
 
       - name: Wait for sshd
         shell: pwsh
@@ -242,7 +244,8 @@ jobs:
               --dart-define=TEST_SSH_HOST=127.0.0.1 \
               --dart-define=TEST_SSH_PORT=22 \
               --dart-define=TEST_SSH_USER=runneradmin \
-              --dart-define=TEST_SSH_PASS=Testpass123!
+              --dart-define=TEST_SSH_PASS=Testpass123! \
+              --dart-define=TEST_SSH_SFTP_DIR=C:/Users/runneradmin
           done
 
       - name: Upload test screenshots
@@ -280,6 +283,11 @@ jobs:
           # parsing is picky about interleaved flags, and a silently unset
           # password kills the whole test suite at SSH auth.
           sudo sysadminctl -addUser testuser -password testpass
+          # Belt and braces: re-set the password through dscl (works for
+          # users we just created, unlike the protected runner account) in
+          # case sysadminctl's storage didn't land in a form OpenDirectory
+          # verifies over sshd.
+          sudo dscl . -passwd /Users/testuser testpass
           sudo dscl . -create /Users/testuser UserShell /bin/bash
           sudo createhomedir -c -u testuser >/dev/null 2>&1 || true
           # SFTP marker, as in Dockerfile.sshd. The runner's system volume is
@@ -312,14 +320,17 @@ jobs:
             set timeout 30
             spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                      -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-                     -p 22 testuser@127.0.0.1 echo ssh-login-ok
+                     -p 22 testuser@127.0.0.1 echo pw-login-verified
             expect {
               -re "(?i)password:" { send "testpass\r"; exp_continue }
               eof
             }
           ')
           echo "$out"
-          echo "$out" | grep -q ssh-login-ok || {
+          # Start-anchor only (the line may carry a trailing CR from the ssh
+          # client): the marker also appears verbatim in the spawned command
+          # line, but that line starts with "spawn ssh".
+          echo "$out" | tr -d '\r' | grep -q "^pw-login-verified" || {
             echo "::error::password SSH login failed; recent sshd logs follow"
             sudo log show --last 5m --info \
               --predicate 'process CONTAINS "sshd"' --style compact | tail -80
