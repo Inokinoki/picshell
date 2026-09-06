@@ -286,6 +286,13 @@ jobs:
           sudo sysadminctl -addUser testuser -password testpass
           sudo dscl . -create /Users/testuser UserShell /bin/bash
           sudo createhomedir -c -u testuser >/dev/null 2>&1 || true
+          # pam_sacl's account phase denies SSH to anyone outside the SSH
+          # service ACL group ("Access denied for user ... by PAM account
+          # configuration") when that group exists on the image, so make
+          # testuser a member.
+          if dseditgroup -o read com.apple.access_ssh >/dev/null 2>&1; then
+            sudo dseditgroup -o edit -a testuser -t user com.apple.access_ssh
+          fi
           ssh-keygen -t ed25519 -N "" -f "$RUNNER_TEMP/picshell_test_key"
           sudo mkdir -p /Users/testuser/.ssh
           sudo cp "$RUNNER_TEMP/picshell_test_key.pub" /Users/testuser/.ssh/authorized_keys
