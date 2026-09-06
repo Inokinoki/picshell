@@ -113,13 +113,20 @@ jobs:
           done
 
       - name: Run Linux integration tests
-        # xvfb provides the X display the GTK runner needs.
-        run: >
-          xvfb-run -a flutter test integration_test/ -d linux
-          --dart-define=TEST_SSH_HOST=127.0.0.1
-          --dart-define=TEST_SSH_PORT=2222
-          --dart-define=TEST_SSH_USER=root
-          --dart-define=TEST_SSH_PASS=testpass
+        # Desktop integration tests must run one file per invocation: within
+        # a single `flutter test`, every file after the first fails to launch
+        # the app ("Error waiting for a debug connection") — a known
+        # flutter_tools desktop limitation. xvfb provides the X display the
+        # GTK runner needs.
+        run: |
+          set -e
+          for f in integration_test/*_test.dart; do
+            xvfb-run -a flutter test "$f" -d linux \
+              --dart-define=TEST_SSH_HOST=127.0.0.1 \
+              --dart-define=TEST_SSH_PORT=2222 \
+              --dart-define=TEST_SSH_USER=root \
+              --dart-define=TEST_SSH_PASS=testpass
+          done
 
       - name: Upload test screenshots
         if: always()
@@ -188,8 +195,10 @@ jobs:
             if (-not $started) { throw "sshd failed to start" }
           }
           # Password-protect the built-in admin account the tests log in as
-          # (its profile already exists on the image).
-          $pw = ConvertTo-SecureString 'testpass' -AsPlainText -Force
+          # (its profile already exists on the image). The password must
+          # satisfy the Windows complexity policy (upper+lower+digit+special)
+          # — a plain-word password throws InvalidPasswordException.
+          $pw = ConvertTo-SecureString 'Testpass123!' -AsPlainText -Force
           Set-LocalUser -Name runneradmin -Password $pw
 
       - name: Create sshd fixtures
@@ -223,12 +232,18 @@ jobs:
           if (-not $up) { throw "sshd did not come up on port 22" }
 
       - name: Run Windows integration tests
-        run: >
-          flutter test integration_test/ -d windows
-          --dart-define=TEST_SSH_HOST=127.0.0.1
-          --dart-define=TEST_SSH_PORT=22
-          --dart-define=TEST_SSH_USER=runneradmin
-          --dart-define=TEST_SSH_PASS=testpass
+        # One file per invocation — see the Linux job note. bash (Git Bash)
+        # for the loop; the app itself is the Windows desktop runner.
+        shell: bash
+        run: |
+          set -e
+          for f in integration_test/*_test.dart; do
+            flutter test "$f" -d windows \
+              --dart-define=TEST_SSH_HOST=127.0.0.1 \
+              --dart-define=TEST_SSH_PORT=22 \
+              --dart-define=TEST_SSH_USER=runneradmin \
+              --dart-define=TEST_SSH_PASS=Testpass123!
+          done
 
       - name: Upload test screenshots
         if: always()
@@ -263,8 +278,10 @@ jobs:
           sudo systemsetup -f -setremotelogin on
           sudo sysadminctl -addUser testuser -fullName "Picshell Test" -password testpass
           sudo createhomedir -c -u testuser >/dev/null 2>&1 || true
-          # SFTP marker at the filesystem root, as in Dockerfile.sshd.
-          echo 'picshell-sftp-smoke' | sudo tee /picshell_sftp_marker.txt >/dev/null
+          # SFTP marker, as in Dockerfile.sshd. The runner's system volume is
+          # sealed (read-only root), so the marker lives in /private/tmp and
+          # the tests get its directory via TEST_SSH_SFTP_DIR.
+          echo 'picshell-sftp-smoke' | sudo tee /private/tmp/picshell_sftp_marker.txt >/dev/null
           # OSC 1337 emitter, same as Dockerfile.sshd's /tmp/send.sh.
           printf '%s\n' \
             '#!/bin/bash' \
@@ -284,12 +301,17 @@ jobs:
           done
 
       - name: Run macOS integration tests
-        run: >
-          flutter test integration_test/ -d mac
-          --dart-define=TEST_SSH_HOST=127.0.0.1
-          --dart-define=TEST_SSH_PORT=22
-          --dart-define=TEST_SSH_USER=testuser
-          --dart-define=TEST_SSH_PASS=testpass
+        # One file per invocation — see the Linux job note.
+        run: |
+          set -e
+          for f in integration_test/*_test.dart; do
+            flutter test "$f" -d mac \
+              --dart-define=TEST_SSH_HOST=127.0.0.1 \
+              --dart-define=TEST_SSH_PORT=22 \
+              --dart-define=TEST_SSH_USER=testuser \
+              --dart-define=TEST_SSH_PASS=testpass \
+              --dart-define=TEST_SSH_SFTP_DIR=/private/tmp
+          done
 
       - name: Upload test screenshots
         if: always()

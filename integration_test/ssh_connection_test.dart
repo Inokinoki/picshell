@@ -49,6 +49,12 @@ const _sshPort = int.fromEnvironment('TEST_SSH_PORT', defaultValue: 2222);
 const _sshUser = String.fromEnvironment('TEST_SSH_USER', defaultValue: 'root');
 const _sshPass = String.fromEnvironment('TEST_SSH_PASS', defaultValue: 'testpass');
 
+/// Directory holding the SFTP marker file (Dockerfile.sshd puts it at /).
+/// macOS CI runners have a sealed read-only root volume, so there the marker
+/// lives in /private/tmp and CI points this at it.
+const _sftpDir = String.fromEnvironment('TEST_SSH_SFTP_DIR', defaultValue: '/');
+final _sftpRoot = _sftpDir.endsWith('/') ? _sftpDir : '$_sftpDir/';
+
 Future<ProviderContainer> _initApp() async {
   if (!_hiveReady) {
     await Hive.initFlutter();
@@ -392,13 +398,13 @@ void main() {
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
       final sftp = await connectSessionHelper(tester, container);
-      final entries = await sftp.listdir('/');
+      final entries = await sftp.listdir(_sftpDir);
 
       expect(entries, isNotEmpty, reason: 'root listing should not be empty');
       expect(
         entries.any((e) => e.name == 'picshell_sftp_marker.txt'),
         isTrue,
-        reason: 'marker file from Dockerfile.sshd should be listed',
+        reason: 'marker file from the test sshd should be listed',
       );
 
       await sftp.close();
@@ -416,7 +422,7 @@ void main() {
       final sftp = await connectSessionHelper(tester, container);
       final tmp = await Directory.systemTemp.createTemp('picshell_sftp_');
       final localPath = '${tmp.path}/marker.txt';
-      await sftp.download('/picshell_sftp_marker.txt', localPath);
+      await sftp.download('${_sftpRoot}picshell_sftp_marker.txt', localPath);
 
       final content = await File(localPath).readAsString();
       expect(content.trim(), 'picshell-sftp-smoke');
