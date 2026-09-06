@@ -279,17 +279,20 @@ jobs:
       - name: Enable sshd and create test fixtures
         run: |
           sudo systemsetup -f -setremotelogin on
-          # Keep -password immediately after -addUser: sysadminctl's argument
-          # parsing is picky about interleaved flags, and a silently unset
-          # password kills the whole test suite at SSH auth.
+          # Password auth is a dead end on this image: pam_opendirectory
+          # rejects programmatically-set passwords (unified log: "Failed
+          # password for testuser"). The account still needs to exist, but
+          # the tests authenticate with a generated key instead.
           sudo sysadminctl -addUser testuser -password testpass
-          # Belt and braces: re-set the password through dscl (works for
-          # users we just created, unlike the protected runner account) in
-          # case sysadminctl's storage didn't land in a form OpenDirectory
-          # verifies over sshd.
-          sudo dscl . -passwd /Users/testuser testpass
           sudo dscl . -create /Users/testuser UserShell /bin/bash
           sudo createhomedir -c -u testuser >/dev/null 2>&1 || true
+          ssh-keygen -t ed25519 -N "" -f "$RUNNER_TEMP/picshell_test_key"
+          sudo mkdir -p /Users/testuser/.ssh
+          sudo cp "$RUNNER_TEMP/picshell_test_key.pub" /Users/testuser/.ssh/authorized_keys
+          sudo chown -R testuser:staff /Users/testuser/.ssh
+          # StrictModes: sshd refuses the key without these exact modes.
+          sudo chmod 700 /Users/testuser/.ssh
+          sudo chmod 600 /Users/testuser/.ssh/authorized_keys
           # SFTP marker, as in Dockerfile.sshd. The runner's system volume is
           # sealed (read-only root), so the marker lives in /private/tmp and
           # the tests get its directory via TEST_SSH_SFTP_DIR.
@@ -305,20 +308,6 @@ jobs:
           sudo sed -i '' 's/^#\{0,1\}PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           grep -q '^PasswordAuthentication yes' /etc/ssh/sshd_config || \
             echo 'PasswordAuthentication yes' | sudo tee -a /etc/ssh/sshd_config >/dev/null
-          # sysadminctl-created users have no Kerberos principal, and pam_krb5
-          # failing to determine one ABORTS the whole PAM authentication
-          # (sshd closes the connection preauth; confirmed in the unified
-          # log: "pam_sm_authenticate(): Failed to determine Kerberos
-          # principal name"). Mark it optional — pam_opendirectory still
-          # verifies the password itself.
-          sudo grep -n pam_krb5 /etc/pam.d/sshd || true
-          # BSD sed has no alternation, hence perl. The leading `.*` on the
-          # match drops pam_krb5's own args (use_kcminit etc.) — fine for a
-          # module whose result we no longer care about.
-          sudo perl -pi -e \
-            's/^auth\s+(?:required|sufficient|requisite)\s+pam_krb5\.so\b.*/auth\toptional\tpam_krb5.so/' \
-            /etc/pam.d/sshd
-          sudo grep -n pam_krb5 /etc/pam.d/sshd || true
           sudo launchctl enable system/com.openssh.sshd || true
           sudo launchctl kickstart -k system/com.openssh.sshd || true
           for i in $(seq 1 30); do
@@ -326,26 +315,17 @@ jobs:
             sleep 1
           done
 
-          # Smoke-test the password login BEFORE the minutes-long test suite,
-          # and on failure dump sshd's effective config and its own logs so
-          # the root cause is visible from the run output alone.
-          sudo sshd -T 2>/dev/null | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|usepam|authenticationmethods)'
-          out=$(expect -c '
-            set timeout 30
-            spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                     -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-                     -p 22 testuser@127.0.0.1 echo pw-login-verified
-            expect {
-              -re "(?i)password:" { send "testpass\r"; exp_continue }
-              eof
-            }
-          ')
-          echo "$out"
-          # Start-anchor only (the line may carry a trailing CR from the ssh
-          # client): the marker also appears verbatim in the spawned command
-          # line, but that line starts with "spawn ssh".
-          echo "$out" | tr -d '\r' | grep -q "^pw-login-verified" || {
-            echo "::error::password SSH login failed; recent sshd logs follow"
+          # Smoke-test the key login BEFORE the minutes-long test suite, and
+          # on failure dump sshd's effective config and its own logs so the
+          # root cause is visible from the run output alone.
+          sudo sshd -T 2>/dev/null | grep -Ei '^(pubkeyauthentication|passwordauthentication|usepam)'
+          ssh -i "$RUNNER_TEMP/picshell_test_key" \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o IdentitiesOnly=yes -o PasswordAuthentication=no \
+              -p 22 testuser@127.0.0.1 echo key-login-ok > /tmp/ssh_check.out 2>&1 || true
+          cat /tmp/ssh_check.out
+          grep -q "key-login-ok" /tmp/ssh_check.out || {
+            echo "::error::key SSH login failed; recent sshd logs follow"
             sudo log show --last 5m --info \
               --predicate 'process CONTAINS "sshd"' --style compact | tail -80
             exit 1
@@ -356,11 +336,12 @@ jobs:
         run: |
           set -e
           for f in integration_test/*_test.dart; do
+            KEY_B64=$(base64 -i "$RUNNER_TEMP/picshell_test_key" | tr -d '\n')
             flutter test "$f" -d mac \
               --dart-define=TEST_SSH_HOST=127.0.0.1 \
               --dart-define=TEST_SSH_PORT=22 \
               --dart-define=TEST_SSH_USER=testuser \
-              --dart-define=TEST_SSH_PASS=testpass \
+              --dart-define=TEST_SSH_KEY_B64="$KEY_B64" \
               --dart-define=TEST_SSH_SFTP_DIR=/private/tmp
           done
 

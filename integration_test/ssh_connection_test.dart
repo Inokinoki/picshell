@@ -23,6 +23,8 @@ import 'package:picshell/providers/vault_provider.dart';
 import 'package:picshell/services/vault_service.dart';
 import 'package:picshell/widgets/floating_image_widget.dart';
 
+import 'helpers.dart';
+
 bool _hiveReady = false;
 
 /// Inert vault backend: the app shell requires a vault provider, but these
@@ -39,15 +41,6 @@ class _NoopBackend implements VaultBackend {
   @override
   Future<void> deleteKey() async {}
 }
-
-/// Connection target for the throwaway docker sshd. Defaults to localhost for
-/// local runs; CI injects 10.0.2.2 (the Android emulator's alias for the host
-/// loopback) so the emulator can reach the sshd container published on the
-/// runner host. Port defaults to 2222 (Dockerfile.sshd).
-const _sshHost = String.fromEnvironment('TEST_SSH_HOST', defaultValue: '127.0.0.1');
-const _sshPort = int.fromEnvironment('TEST_SSH_PORT', defaultValue: 2222);
-const _sshUser = String.fromEnvironment('TEST_SSH_USER', defaultValue: 'root');
-const _sshPass = String.fromEnvironment('TEST_SSH_PASS', defaultValue: 'testpass');
 
 /// Directory holding the SFTP marker file (Dockerfile.sshd puts it at /).
 /// macOS CI runners have a sealed read-only root volume, so there the marker
@@ -185,24 +178,9 @@ void main() {
       ));
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
-      // Drive a connection to the docker sshd reachable from the Android
-      // emulator via the 10.0.2.2 host-loopback alias.
-      final host = Host(
-        id: 'test-sshd',
-        name: 'docker-sshd',
-        hostname: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authType: AuthType.password,
-        password: _sshPass,
-      );
-      final config = SshConnectionConfig(
-        host: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authMethod: SshAuthMethod.password,
-        password: _sshPass,
-      );
+      // Drive a connection to the test sshd (host/port from TEST_SSH_*).
+      final host = testHost();
+      final config = testConfig();
 
       final connected = await _connectWithRetry(tester, container, host, config);
 
@@ -223,22 +201,8 @@ void main() {
       ));
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
-      final host = Host(
-        id: 'test-sshd',
-        name: 'docker-sshd',
-        hostname: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authType: AuthType.password,
-        password: _sshPass,
-      );
-      final config = SshConnectionConfig(
-        host: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authMethod: SshAuthMethod.password,
-        password: _sshPass,
-      );
+      final host = testHost();
+      final config = testConfig();
       final connected = await _connectWithRetry(tester, container, host, config);
       expect(connected, isTrue, reason: 'session should connect');
 
@@ -289,22 +253,8 @@ void main() {
       ));
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
-      final host = Host(
-        id: 'test-sshd',
-        name: 'docker-sshd',
-        hostname: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authType: AuthType.password,
-        password: _sshPass,
-      );
-      final config = SshConnectionConfig(
-        host: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authMethod: SshAuthMethod.password,
-        password: _sshPass,
-      );
+      final host = testHost();
+      final config = testConfig();
       await _connectWithRetry(tester, container, host, config);
 
       final terminal = container.read(sessionListProvider).first.terminal;
@@ -366,22 +316,8 @@ void main() {
       WidgetTester tester,
       ProviderContainer container,
     ) async {
-      final host = Host(
-        id: 'test-sshd',
-        name: 'docker-sshd',
-        hostname: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authType: AuthType.password,
-        password: _sshPass,
-      );
-      final config = SshConnectionConfig(
-        host: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authMethod: SshAuthMethod.password,
-        password: _sshPass,
-      );
+      final host = testHost();
+      final config = testConfig();
       final connected = await _connectWithRetry(tester, container, host, config);
       expect(connected, isTrue, reason: 'SFTP smoke needs a connected session');
       final sessions = container.read(sessionListProvider);
