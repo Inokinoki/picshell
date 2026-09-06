@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart' show Iterm2Dimension, Iterm2Unit;
 import '../models/floating_image.dart';
 import '../providers/floating_image_provider.dart';
+
+/// Lower bound on the rendered size of a floating image window. Without it a
+/// tiny image (or deep zoom-out) would shrink the window past the point
+/// where the title bar — filename plus minimize/close buttons — still fits.
+/// The image itself is drawn with BoxFit.contain, so it never distorts
+/// inside the floored window.
+const Size minImageWindowSize = Size(120, 80);
 
 /// Singleton that tracks whether Option (macOS) or Alt (other) is held.
 ///
@@ -266,9 +274,12 @@ class _FloatingImageWidgetState extends ConsumerState<FloatingImageWidget> {
   Widget build(BuildContext context) {
     final img = widget.image;
     final baseSize = img.size != Size.zero ? img.size : const Size(200, 200);
-    // Actual rendered size = base × user zoom scale.
-    final renderSize =
-        Size(baseSize.width * img.scale, baseSize.height * img.scale);
+    // Actual rendered size = base × user zoom scale, floored at
+    // [minImageWindowSize] so the window stays usable.
+    final renderSize = Size(
+      math.max(baseSize.width * img.scale, minImageWindowSize.width),
+      math.max(baseSize.height * img.scale, minImageWindowSize.height),
+    );
 
     // Clamp the rendered position so an image can never be dragged fully
     // off-screen (it would become unreachable — no gesture or tab reaches it).
