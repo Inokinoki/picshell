@@ -23,6 +23,8 @@ import 'package:picshell/providers/vault_provider.dart';
 import 'package:picshell/services/vault_service.dart';
 import 'package:picshell/widgets/floating_image_widget.dart';
 
+import 'helpers.dart';
+
 bool _hiveReady = false;
 
 /// Inert vault backend: the app shell requires a vault provider, but these
@@ -40,14 +42,11 @@ class _NoopBackend implements VaultBackend {
   Future<void> deleteKey() async {}
 }
 
-/// Connection target for the throwaway docker sshd. Defaults to localhost for
-/// local runs; CI injects 10.0.2.2 (the Android emulator's alias for the host
-/// loopback) so the emulator can reach the sshd container published on the
-/// runner host. Port defaults to 2222 (Dockerfile.sshd).
-const _sshHost = String.fromEnvironment('TEST_SSH_HOST', defaultValue: '127.0.0.1');
-const _sshPort = int.fromEnvironment('TEST_SSH_PORT', defaultValue: 2222);
-const _sshUser = String.fromEnvironment('TEST_SSH_USER', defaultValue: 'root');
-const _sshPass = String.fromEnvironment('TEST_SSH_PASS', defaultValue: 'testpass');
+/// Directory holding the SFTP marker file (Dockerfile.sshd puts it at /).
+/// macOS CI runners have a sealed read-only root volume, so there the marker
+/// lives in /private/tmp and CI points this at it.
+const _sftpDir = String.fromEnvironment('TEST_SSH_SFTP_DIR', defaultValue: '/');
+final _sftpRoot = _sftpDir.endsWith('/') ? _sftpDir : '$_sftpDir/';
 
 Future<ProviderContainer> _initApp() async {
   if (!_hiveReady) {
@@ -179,24 +178,9 @@ void main() {
       ));
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
-      // Drive a connection to the docker sshd reachable from the Android
-      // emulator via the 10.0.2.2 host-loopback alias.
-      final host = Host(
-        id: 'test-sshd',
-        name: 'docker-sshd',
-        hostname: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authType: AuthType.password,
-        password: _sshPass,
-      );
-      final config = SshConnectionConfig(
-        host: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authMethod: SshAuthMethod.password,
-        password: _sshPass,
-      );
+      // Drive a connection to the test sshd (host/port from TEST_SSH_*).
+      final host = testHost();
+      final config = testConfig();
 
       final connected = await _connectWithRetry(tester, container, host, config);
 
@@ -217,22 +201,8 @@ void main() {
       ));
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
-      final host = Host(
-        id: 'test-sshd',
-        name: 'docker-sshd',
-        hostname: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authType: AuthType.password,
-        password: _sshPass,
-      );
-      final config = SshConnectionConfig(
-        host: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authMethod: SshAuthMethod.password,
-        password: _sshPass,
-      );
+      final host = testHost();
+      final config = testConfig();
       final connected = await _connectWithRetry(tester, container, host, config);
       expect(connected, isTrue, reason: 'session should connect');
 
@@ -283,22 +253,8 @@ void main() {
       ));
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
-      final host = Host(
-        id: 'test-sshd',
-        name: 'docker-sshd',
-        hostname: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authType: AuthType.password,
-        password: _sshPass,
-      );
-      final config = SshConnectionConfig(
-        host: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authMethod: SshAuthMethod.password,
-        password: _sshPass,
-      );
+      final host = testHost();
+      final config = testConfig();
       await _connectWithRetry(tester, container, host, config);
 
       final terminal = container.read(sessionListProvider).first.terminal;
@@ -360,22 +316,8 @@ void main() {
       WidgetTester tester,
       ProviderContainer container,
     ) async {
-      final host = Host(
-        id: 'test-sshd',
-        name: 'docker-sshd',
-        hostname: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authType: AuthType.password,
-        password: _sshPass,
-      );
-      final config = SshConnectionConfig(
-        host: _sshHost,
-        port: _sshPort,
-        username: _sshUser,
-        authMethod: SshAuthMethod.password,
-        password: _sshPass,
-      );
+      final host = testHost();
+      final config = testConfig();
       final connected = await _connectWithRetry(tester, container, host, config);
       expect(connected, isTrue, reason: 'SFTP smoke needs a connected session');
       final sessions = container.read(sessionListProvider);
@@ -392,13 +334,13 @@ void main() {
       await tester.pumpAndSettle(const Duration(seconds: 2));
 
       final sftp = await connectSessionHelper(tester, container);
-      final entries = await sftp.listdir('/');
+      final entries = await sftp.listdir(_sftpDir);
 
       expect(entries, isNotEmpty, reason: 'root listing should not be empty');
       expect(
         entries.any((e) => e.name == 'picshell_sftp_marker.txt'),
         isTrue,
-        reason: 'marker file from Dockerfile.sshd should be listed',
+        reason: 'marker file from the test sshd should be listed',
       );
 
       await sftp.close();
@@ -416,7 +358,7 @@ void main() {
       final sftp = await connectSessionHelper(tester, container);
       final tmp = await Directory.systemTemp.createTemp('picshell_sftp_');
       final localPath = '${tmp.path}/marker.txt';
-      await sftp.download('/picshell_sftp_marker.txt', localPath);
+      await sftp.download('${_sftpRoot}picshell_sftp_marker.txt', localPath);
 
       final content = await File(localPath).readAsString();
       expect(content.trim(), 'picshell-sftp-smoke');

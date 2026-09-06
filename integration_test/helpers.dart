@@ -1,3 +1,4 @@
+import 'dart:convert' show base64Decode, utf8;
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +26,40 @@ const sshHost = String.fromEnvironment('TEST_SSH_HOST', defaultValue: '127.0.0.1
 const sshPort = int.fromEnvironment('TEST_SSH_PORT', defaultValue: 2222);
 const sshUser = String.fromEnvironment('TEST_SSH_USER', defaultValue: 'root');
 const sshPass = String.fromEnvironment('TEST_SSH_PASS', defaultValue: 'testpass');
+
+/// Optional private key (PEM, base64-encoded) passed via --dart-define. When
+/// set, every test connection authenticates with that key instead of the
+/// password — the macOS CI sshd rejects programmatically-set passwords
+/// ("Failed password" via pam_opendirectory), so key auth is the reliable
+/// path there. Base64 (not a file path) because the sandboxed macOS app
+/// cannot read files outside its container.
+const sshKeyB64 = String.fromEnvironment('TEST_SSH_KEY_B64');
+
+Host testHost() => Host(
+      id: 'feat-test',
+      name: 'feat-test',
+      hostname: sshHost,
+      port: sshPort,
+      username: sshUser,
+      authType: sshKeyB64.isEmpty ? AuthType.password : AuthType.key,
+      password: sshKeyB64.isEmpty ? sshPass : null,
+    );
+
+SshConnectionConfig testConfig() => sshKeyB64.isEmpty
+    ? SshConnectionConfig(
+        host: sshHost,
+        port: sshPort,
+        username: sshUser,
+        authMethod: SshAuthMethod.password,
+        password: sshPass,
+      )
+    : SshConnectionConfig(
+        host: sshHost,
+        port: sshPort,
+        username: sshUser,
+        authMethod: SshAuthMethod.key,
+        privateKeyPem: utf8.decode(base64Decode(sshKeyB64)),
+      );
 
 /// Switchable vault backend: [grant] controls whether authenticate()
 /// succeeds, so the unlock success and failure paths are both testable
@@ -108,26 +143,8 @@ Future<void> pumpApp(WidgetTester tester, ProviderContainer container) async {
 /// terminal view is mounted. Returns the connected session's terminal.
 Future<dynamic> connectSession(
     WidgetTester tester, ProviderContainer container) async {
-  final config = SshConnectionConfig(
-    host: sshHost,
-    port: sshPort,
-    username: sshUser,
-    authMethod: SshAuthMethod.password,
-    password: sshPass,
-  );
   final notifier = container.read(sessionListProvider.notifier);
-  await notifier.openSession(
-    Host(
-      id: 'feat-test',
-      name: 'feat-test',
-      hostname: sshHost,
-      port: sshPort,
-      username: sshUser,
-      authType: AuthType.password,
-      password: sshPass,
-    ),
-    config,
-  );
+  await notifier.openSession(testHost(), testConfig());
   for (int i = 0; i < 60; i++) {
     await tester.pump(const Duration(seconds: 1));
     final sessions = container.read(sessionListProvider);

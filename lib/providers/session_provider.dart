@@ -156,6 +156,10 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
     // auto-reconnect replaces SessionState.sshService, and a closure over
     // the original instance would silently drop user input after the swap.
     SshTransport? currentService() {
+      // Terminal events can arrive while the owning container is tearing
+      // down (dispose races the async transport close); reading state on a
+      // disposed notifier throws, so route nothing instead.
+      if (!mounted) return null;
       for (final s in state) {
         if (s.id == sessionId) return s.sshService;
       }
@@ -175,6 +179,9 @@ class SessionListNotifier extends StateNotifier<List<SessionState>> {
       inline = true,
       preserveAspectRatio = true,
     }) {
+      // See currentService(): guard against container teardown racing a
+      // late decode.
+      if (!mounted) return;
       final image = FloatingImage(
         id: _uuid.v4(),
         rawBytes: bytes,

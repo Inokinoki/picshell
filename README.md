@@ -97,8 +97,11 @@ docker build -t picshell-sshd -f Dockerfile.sshd .
 docker run -d --name picshell-sshd -p 2222:2222 picshell-sshd
 ```
 
-CI runs the unit suite plus the Android-emulator integration job on
-every pull request (see `.github/workflows/`).
+CI runs the unit suite plus integration jobs for Android (emulator) and
+the Linux, Windows and macOS desktops on every pull request (see
+`.github/workflows/`). Desktop jobs point `TEST_SSH_*` at a native sshd
+(Docker container on Linux); locally the same suite runs against the
+throwaway server above with `TEST_SSH_HOST=127.0.0.1`.
 
 ## Project layout
 

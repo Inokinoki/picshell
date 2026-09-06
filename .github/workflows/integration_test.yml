@@ -73,3 +73,292 @@ jobs:
             integration_test/screenshots/
           retention-days: 7
           if-no-files-found: ignore
+
+  # Desktop jobs run the same integration_test/ suite as Android, against the
+  # same throwaway sshd (Docker container on Linux; native sshd with matching
+  # fixtures on Windows/macOS, where Docker isn't available on runners).
+  linux-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - run: flutter pub get
+
+      # Toolchain required to build the Flutter Linux desktop runner.
+      # libsecret-1/libjsoncpp are demanded by flutter_secure_storage_linux's
+      # CMake pkg-config check, on top of the base GTK toolchain.
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev
+
+      - run: flutter config --enable-linux-desktop
+
+      # Same throwaway sshd container as the Android job (Dockerfile.sshd
+      # ships the SFTP marker and OSC 1337 fixtures the tests assert on).
+      # The desktop app dials the host loopback directly — no emulator hop.
+      - name: Start sshd container
+        run: |
+          docker build -f Dockerfile.sshd -t picshell-sshd-test .
+          docker run -d --name sshd -p 2222:2222 picshell-sshd-test
+          for i in $(seq 1 20); do
+            if nc -z localhost 2222; then echo "sshd up"; break; fi
+            sleep 1
+          done
+
+      - name: Run Linux integration tests
+        # Desktop integration tests must run one file per invocation: within
+        # a single `flutter test`, every file after the first fails to launch
+        # the app ("Error waiting for a debug connection") — a known
+        # flutter_tools desktop limitation. xvfb provides the X display the
+        # GTK runner needs.
+        run: |
+          set -e
+          for f in integration_test/*_test.dart; do
+            xvfb-run -a flutter test "$f" -d linux \
+              --dart-define=TEST_SSH_HOST=127.0.0.1 \
+              --dart-define=TEST_SSH_PORT=2222 \
+              --dart-define=TEST_SSH_USER=root \
+              --dart-define=TEST_SSH_PASS=testpass
+          done
+
+      - name: Upload test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-screenshots-linux
+          path: |
+            build/reports/
+            integration_test/screenshots/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  windows-integration:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - run: flutter pub get
+
+      # Native Win32-OpenSSH stands in for the throwaway sshd container.
+      # Git Bash is configured as the sshd default shell so the tests'
+      # `bash /tmp/send.sh` works (MSYS maps /tmp to the logging-in user's
+      # %TEMP%), and the Dockerfile.sshd fixtures are recreated natively.
+      - name: Install and configure sshd
+        shell: pwsh
+        run: |
+          $cap = Get-WindowsCapability -Online |
+            Where-Object Name -like 'OpenSSH.Server*' |
+            Select-Object -First 1
+          if ($cap.State -ne 'Installed') {
+            Add-WindowsCapability -Online -Name $cap.Name | Out-Null
+          }
+          New-Item -Path "HKLM:\SOFTWARE\OpenSSH" -Force | Out-Null
+          New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell `
+            -Value "C:\Program Files\Git\bin\bash.exe" -PropertyType String `
+            -Force | Out-Null
+          # Mirror Dockerfile.sshd: explicit password auth and the relaxed
+          # MaxStartups that tolerates the tests' burst of connections.
+          # The stock config ENDS with a `Match Group administrators` block;
+          # appending directives after it lands them inside the Match scope
+          # and sshd aborts at startup ("Directive ... is not allowed within
+          # a Match block"). So strip any existing copies and PREPEND.
+          $cfg = "C:\ProgramData\ssh\sshd_config"
+          $kept = Get-Content $cfg |
+            Where-Object { $_ -notmatch '^\s*#?\s*(PasswordAuthentication|MaxStartups)\b' }
+          $directives = @('PasswordAuthentication yes', 'MaxStartups 50:30:100')
+          Set-Content -Path $cfg -Value ($directives + $kept)
+
+          Set-Service sshd -StartupType Automatic
+          if ((Get-Service sshd).Status -eq 'Running') {
+            Restart-Service sshd
+          } else {
+            # Fresh capability installs occasionally need a moment before the
+            # service will start; retry instead of failing on the first try.
+            $started = $false
+            for ($i = 0; $i -lt 5; $i++) {
+              Start-Service sshd -ErrorAction SilentlyContinue
+              if ((Get-Service sshd).Status -eq 'Running') { $started = $true; break }
+              Start-Sleep -Seconds 2
+            }
+            if (-not $started) { throw "sshd failed to start" }
+          }
+          # Password-protect the built-in admin account the tests log in as
+          # (its profile already exists on the image). The password must
+          # satisfy the Windows complexity policy (upper+lower+digit+special)
+          # — a plain-word password throws InvalidPasswordException.
+          $pw = ConvertTo-SecureString 'Testpass123!' -AsPlainText -Force
+          Set-LocalUser -Name runneradmin -Password $pw
+
+      - name: Create sshd fixtures
+        shell: pwsh
+        run: |
+          # Win32-OpenSSH's SFTP didn't list a marker written to C:\ as '/', so
+          # keep it in the login user's home (whose absolute DOS-style path the
+          # sftp server accepts directly) and point TEST_SSH_SFTP_DIR at it.
+          $home_ = "C:\Users\runneradmin"
+          [IO.File]::WriteAllText("$home_\picshell_sftp_marker.txt", "picshell-sftp-smoke`n")
+          # OSC 1337 emitter, same as Dockerfile.sshd's /tmp/send.sh. Git Bash
+          # maps /tmp to runneradmin's %TEMP%; bash rejects CRLF, so write
+          # with LF endings.
+          $send = @'
+          #!/bin/bash
+          B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+          printf "\033]1337;File=inline=1;name=dC5wbmc=;width=80;height=40:%s\a\n" "$B64"
+          '@ -replace "`r`n", "`n"
+          [IO.File]::WriteAllText("$home_\AppData\Local\Temp\send.sh", $send)
+
+      - name: Wait for sshd
+        shell: pwsh
+        run: |
+          $up = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            if (Test-NetConnection 127.0.0.1 -Port 22 `
+                  -InformationLevel Quiet -WarningAction SilentlyContinue) {
+              $up = $true
+              break
+            }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $up) { throw "sshd did not come up on port 22" }
+
+      - name: Run Windows integration tests
+        # One file per invocation — see the Linux job note. bash (Git Bash)
+        # for the loop; the app itself is the Windows desktop runner.
+        shell: bash
+        run: |
+          set -e
+          for f in integration_test/*_test.dart; do
+            flutter test "$f" -d windows \
+              --dart-define=TEST_SSH_HOST=127.0.0.1 \
+              --dart-define=TEST_SSH_PORT=22 \
+              --dart-define=TEST_SSH_USER=runneradmin \
+              --dart-define=TEST_SSH_PASS=Testpass123! \
+              --dart-define=TEST_SSH_SFTP_DIR=C:/Users/runneradmin
+          done
+
+      - name: Upload test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-screenshots-windows
+          path: |
+            build/reports/
+            integration_test/screenshots/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  macos-integration:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - run: flutter pub get
+
+      # Native sshd (Remote Login) stands in for the throwaway sshd container
+      # — macOS runners have no Docker. The image's managed `runner` account
+      # cannot have its password reset (dscl -passwd fails with eDSAuthFailed),
+      # so a dedicated password-login user is created for the tests, and the
+      # Dockerfile.sshd fixtures are recreated natively.
+      - name: Enable sshd and create test fixtures
+        run: |
+          sudo systemsetup -f -setremotelogin on
+          # Password auth is a dead end on this image: pam_opendirectory
+          # rejects programmatically-set passwords (unified log: "Failed
+          # password for testuser"). The account still needs to exist, but
+          # the tests authenticate with a generated key instead.
+          sudo sysadminctl -addUser testuser -password testpass
+          sudo dscl . -create /Users/testuser UserShell /bin/bash
+          sudo createhomedir -c -u testuser >/dev/null 2>&1 || true
+          # pam_sacl's account phase denies SSH to anyone outside the SSH
+          # service ACL group ("Access denied for user ... by PAM account
+          # configuration") when that group exists on the image, so make
+          # testuser a member.
+          if dseditgroup -o read com.apple.access_ssh >/dev/null 2>&1; then
+            sudo dseditgroup -o edit -a testuser -t user com.apple.access_ssh
+          fi
+          ssh-keygen -t ed25519 -N "" -f "$RUNNER_TEMP/picshell_test_key"
+          sudo mkdir -p /Users/testuser/.ssh
+          sudo cp "$RUNNER_TEMP/picshell_test_key.pub" /Users/testuser/.ssh/authorized_keys
+          sudo chown -R testuser:staff /Users/testuser/.ssh
+          # StrictModes: sshd refuses the key without these exact modes.
+          sudo chmod 700 /Users/testuser/.ssh
+          sudo chmod 600 /Users/testuser/.ssh/authorized_keys
+          # SFTP marker, as in Dockerfile.sshd. The runner's system volume is
+          # sealed (read-only root), so the marker lives in /private/tmp and
+          # the tests get its directory via TEST_SSH_SFTP_DIR.
+          echo 'picshell-sftp-smoke' | sudo tee /private/tmp/picshell_sftp_marker.txt >/dev/null
+          # OSC 1337 emitter, same as Dockerfile.sshd's /tmp/send.sh.
+          printf '%s\n' \
+            '#!/bin/bash' \
+            'B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"' \
+            'printf "\033]1337;File=inline=1;name=dC5wbmc=;width=80;height=40:%s\a\n" "$B64"' \
+            > /tmp/send.sh
+          chmod +x /tmp/send.sh
+          # Make sure password auth is on, then bounce sshd to apply config.
+          sudo sed -i '' 's/^#\{0,1\}PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          grep -q '^PasswordAuthentication yes' /etc/ssh/sshd_config || \
+            echo 'PasswordAuthentication yes' | sudo tee -a /etc/ssh/sshd_config >/dev/null
+          sudo launchctl enable system/com.openssh.sshd || true
+          sudo launchctl kickstart -k system/com.openssh.sshd || true
+          for i in $(seq 1 30); do
+            if nc -z localhost 22; then echo "sshd up"; break; fi
+            sleep 1
+          done
+
+          # Smoke-test the key login BEFORE the minutes-long test suite, and
+          # on failure dump sshd's effective config and its own logs so the
+          # root cause is visible from the run output alone.
+          sudo sshd -T 2>/dev/null | grep -Ei '^(pubkeyauthentication|passwordauthentication|usepam)'
+          ssh -i "$RUNNER_TEMP/picshell_test_key" \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o IdentitiesOnly=yes -o PasswordAuthentication=no \
+              -p 22 testuser@127.0.0.1 echo key-login-ok > /tmp/ssh_check.out 2>&1 || true
+          cat /tmp/ssh_check.out
+          grep -q "key-login-ok" /tmp/ssh_check.out || {
+            echo "::error::key SSH login failed; recent sshd logs follow"
+            sudo log show --last 5m --info \
+              --predicate 'process CONTAINS "sshd"' --style compact | tail -80
+            exit 1
+          }
+
+      - name: Run macOS integration tests
+        # One file per invocation — see the Linux job note.
+        run: |
+          set -e
+          for f in integration_test/*_test.dart; do
+            KEY_B64=$(base64 -i "$RUNNER_TEMP/picshell_test_key" | tr -d '\n')
+            flutter test "$f" -d mac \
+              --dart-define=TEST_SSH_HOST=127.0.0.1 \
+              --dart-define=TEST_SSH_PORT=22 \
+              --dart-define=TEST_SSH_USER=testuser \
+              --dart-define=TEST_SSH_KEY_B64="$KEY_B64" \
+              --dart-define=TEST_SSH_SFTP_DIR=/private/tmp
+          done
+
+      - name: Upload test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-screenshots-macos
+          path: |
+            build/reports/
+            integration_test/screenshots/
+          retention-days: 7
+          if-no-files-found: ignore

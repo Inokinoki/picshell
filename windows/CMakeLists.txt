@@ -55,6 +55,10 @@ add_subdirectory("runner")
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
+# local_auth_windows still builds on the deprecated MSVC /await experimental
+# coroutines; VS 18's STL turns that into a hard static_assert (STL1011)
+# unless explicitly silenced. Scoped to the plugin targets created below.
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 include(flutter/generated_plugins.cmake)
 
 
