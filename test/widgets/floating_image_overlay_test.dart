@@ -551,6 +551,80 @@ void main() {
       container.dispose();
     });
 
+    testWidgets('tiny image window renders at the minimum size',
+        (tester) async {
+      final container = ProviderContainer();
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: FloatingImageOverlay(
+              child: const Scaffold(
+                body: SizedBox(width: 800, height: 600),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final notifier = container.read(floatingImagesProvider.notifier);
+      notifier.addImage(FloatingImage(
+        id: 'img-1',
+        rawBytes: testPngBytes,
+        name: 'tiny.png',
+        size: const Size(16, 16),
+      ));
+
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      final windowSize = tester.getSize(find.byType(FloatingImageWidget));
+      expect(windowSize.width, minImageWindowSize.width);
+      expect(windowSize.height, greaterThanOrEqualTo(minImageWindowSize.height));
+
+      container.dispose();
+    });
+
+    testWidgets('zooming out cannot shrink the window below the minimum',
+        (tester) async {
+      final container = ProviderContainer();
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: FloatingImageOverlay(
+              child: const Scaffold(
+                body: SizedBox(width: 800, height: 600),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final notifier = container.read(floatingImagesProvider.notifier);
+      notifier.addImage(FloatingImage(
+        id: 'img-1',
+        rawBytes: testPngBytes,
+        name: 'shrink.png',
+        size: const Size(400, 300),
+      ));
+
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      // 400×300 at 0.25 scale would be 100×75 — both below the floor.
+      notifier.updateScale('img-1', 0.25);
+      await tester.pump();
+
+      final windowSize = tester.getSize(find.byType(FloatingImageWidget));
+      expect(windowSize.width, minImageWindowSize.width);
+      expect(windowSize.height, greaterThanOrEqualTo(minImageWindowSize.height));
+
+      container.dispose();
+    });
+
     testWidgets('plain mouse wheel does NOT zoom (passes to terminal)',
         (tester) async {
       final container = ProviderContainer();
